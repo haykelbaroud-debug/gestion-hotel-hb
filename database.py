@@ -1,10 +1,6 @@
-import os
 import sqlite3
 import openpyxl
 from operator import itemgetter
-import streamlit as st
-import psycopg2
-from psycopg2.extras import execute_values
 
 DB_NAME = "hotel_erp_pro.db"
 
@@ -38,55 +34,6 @@ FAMILLES_VALIDES = {
     "MAINTENANCE", "EXTRA ARTICLES", "PRODUITS PISCINES"
 }
 
-def _get_db_url():
-    try:
-        if "DATABASE_URL" in st.secrets:
-            return st.secrets["DATABASE_URL"]
-    except Exception:
-        pass
-    return os.environ.get("DATABASE_URL")
-
-class _PgCursorWrapper:
-    def __init__(self, cursor):
-        self._cursor = cursor
-
-    def execute(self, query, params=None):
-        query_pg = query.replace("?", "%s")
-        if params is not None:
-            return self._cursor.execute(query_pg, params)
-        return self._cursor.execute(query_pg)
-
-    def fetchall(self):
-        return self._cursor.fetchall()
-
-    def fetchone(self):
-        return self._cursor.fetchone()
-
-    def __getattr__(self, name):
-        return getattr(self._cursor, name)
-
-class _PgConnWrapper:
-    def __init__(self, conn):
-        self._conn = conn
-
-    def cursor(self):
-        return _PgCursorWrapper(self._conn.cursor())
-
-    def commit(self):
-        return self._conn.commit()
-
-    def close(self):
-        return self._conn.close()
-
-    def __getattr__(self, name):
-        return getattr(self._conn, name)
-
-def get_connection():
-    db_url = _get_db_url()
-    if db_url:
-        return _PgConnWrapper(psycopg2.connect(db_url))
-    return sqlite3.connect(DB_NAME)
-
 def get_col(row, num_col):
     if row is None or len(row) <= num_col:
         return None
@@ -103,32 +50,13 @@ def nettoyer_nombre(val):
     except ValueError:
         return 0.0
 
+def get_connection():
+    return sqlite3.connect(DB_NAME, timeout=30, check_same_thread=False)
+
 def initialiser_base():
-    db_url = _get_db_url()
     conn = get_connection()
-    c = conn.cursor()
-    if db_url:
-        c.execute("""CREATE TABLE IF NOT EXISTS articles (
-            code TEXT PRIMARY KEY, designation TEXT, classe TEXT, sous_famille TEXT
-        )""")
-        c.execute("""CREATE TABLE IF NOT EXISTS departements (
-            code_court TEXT PRIMARY KEY, nom_long TEXT
-        )""")
-        c.execute("""CREATE TABLE IF NOT EXISTS nuitees (
-            mois TEXT PRIMARY KEY, nb_nuitees DOUBLE PRECISION DEFAULT 0
-        )""")
-        c.execute("""CREATE TABLE IF NOT EXISTS achats (
-            id SERIAL PRIMARY KEY, mois TEXT, code_article TEXT,
-            sous_famille TEXT, fournisseur TEXT, montant_ht DOUBLE PRECISION
-        )""")
-        c.execute("""CREATE TABLE IF NOT EXISTS transferts (
-            id SERIAL PRIMARY KEY, mois TEXT, code_dept TEXT,
-            nom_dept TEXT, sous_famille TEXT, code_article TEXT, designation TEXT,
-            qte_conso DOUBLE PRECISION, val_conso DOUBLE PRECISION
-        )""")
-        for m in LISTE_MOIS:
-            c.execute("INSERT INTO nuitees (mois, nb_nuitees) VALUES (%s, 0) ON CONFLICT (mois) DO NOTHING", (m,))
-    else:
+    try:
+        c = conn.cursor()
         c.execute("""CREATE TABLE IF NOT EXISTS articles (
             code TEXT PRIMARY KEY, designation TEXT, classe TEXT, sous_famille TEXT
         )""")
@@ -149,8 +77,10 @@ def initialiser_base():
         )""")
         for m in LISTE_MOIS:
             c.execute("INSERT OR IGNORE INTO nuitees (mois, nb_nuitees) VALUES (?, 0)", (m,))
-    conn.commit()
-    conn.close()
+        conn.commit()
+        c.close()
+    finally:
+        conn.close()
 def extraire_sous_famille_achat(code_article):
     chaine_verif = code_article.upper().strip()
     mots_longs = ["BUREAU", "HYG", "BUANDERIE", "GUESTS", "CARTOUCHES"]
@@ -169,108 +99,96 @@ def trouver_feuille(wb, prefixe, mois):
     return None
 
 def importer_depuis_excel(chemin_excel):
-    wb = openpyxl.load_workbook(chemin_excel, data_only=True)
-    db_url = _get_db_url()
+    wb = openpyxl.load_workbook(chemin_excel, data_only=True, read_only=True)
     conn = get_connection()
-    c = conn.cursor()
+    try:
+        c = conn.cursor()
 
-    articles_data = {}
-    if "DB_Données" in wb.sheetnames:
-        ws = wb["DB_Données"]
-        c.execute("DELETE FROM articles")
-        for row in ws.iter_rows(min_row=5, values_only=True):
-            c0 = get_col(row, 0)
-            if c0 is not None and str(c0).strip() != "":
-                code = str(c0).strip()
-                if code.endswith(".0"):
-                    code = code[:-2]
-                desig = str(get_col(row, 1) or "").strip()
-                classe = str(get_col(row, 2) or "").strip()
-                sf = str(get_col(row, 4) or "").strip()
-                articles_data[code] = (code, desig, classe, sf)
-        if articles_data:
-            if db_url:
-                execute_values(c._cursor, "INSERT INTO articles (code, designation, classe, sous_famille) VALUES %s", list(articles_data.values()))
-            else:
-                c._cursor.executemany("INSERT OR REPLACE INTO articles VALUES (?, ?, ?, ?)", list(articles_data.values()))
+        if "DB_Données" in wb.sheetnames:
+            ws = wb["DB_Données"]
+            c.execute("DELETE FROM articles")
+            for row in ws.iter_rows(min_row=5, values_only=True):
+                c0 = get_col(row, 0)
+                if c0 is not None and str(c0).strip() != "":
+                    code = str(c0).strip()
+                    if code.endswith(".0"):
+                        code = code[:-2]
+                    desig = str(get_col(row, 1) or "").strip()
+                    classe = str(get_col(row, 2) or "").strip()
+                    sf = str(get_col(row, 4) or "").strip()
+                    c.execute("INSERT OR REPLACE INTO articles VALUES (?, ?, ?, ?)", (code, desig, classe, sf))
 
-    nom_to_code = {}
-    depts_data = {}
-    if "DB_Départements" in wb.sheetnames:
-        ws = wb["DB_Départements"]
-        c.execute("DELETE FROM departements")
-        for row in ws.iter_rows(min_row=5, values_only=True):
-            c0 = get_col(row, 0)
-            c3 = get_col(row, 3)
-            if c0 is not None and c3 is not None:
-                nom_long = str(c0).strip()
-                code_court = str(c3).upper().strip()
-                if nom_long != "" and code_court != "" and code_court != "CODE SAISIE (COURT)":
-                    depts_data[code_court] = (code_court, nom_long)
-                    nom_to_code[nom_long.upper()] = code_court
-        if depts_data:
-            if db_url:
-                execute_values(c._cursor, "INSERT INTO departements (code_court, nom_long) VALUES %s", list(depts_data.values()))
-            else:
-                c._cursor.executemany("INSERT OR REPLACE INTO departements VALUES (?, ?)", list(depts_data.values()))
+        nom_to_code = {}
+        if "DB_Départements" in wb.sheetnames:
+            ws = wb["DB_Départements"]
+            c.execute("DELETE FROM departements")
+            for row in ws.iter_rows(min_row=5, values_only=True):
+                c0 = get_col(row, 0)
+                c3 = get_col(row, 3)
+                if c0 is not None and c3 is not None:
+                    nom_long = str(c0).strip()
+                    code_court = str(c3).upper().strip()
+                    if nom_long != "" and code_court != "" and code_court != "CODE SAISIE (COURT)":
+                        c.execute("INSERT OR REPLACE INTO departements VALUES (?, ?)", (code_court, nom_long))
+                        nom_to_code[nom_long.upper()] = code_court
 
-    c.execute("DELETE FROM achats")
-    c.execute("DELETE FROM transferts")
+        c.execute("DELETE FROM achats")
+        c.execute("DELETE FROM transferts")
 
-    achats_batch = []
-    transferts_batch = []
-    for mois in LISTE_MOIS:
-        ws_achat = trouver_feuille(wb, "DB_Achats_", mois)
-        if ws_achat is not None:
-            for row in ws_achat.iter_rows(min_row=2, values_only=True):
-                c0, c2, c12 = get_col(row, 0), get_col(row, 2), get_col(row, 12)
-                if c0 is not None and c2 is not None and c12 is not None:
-                    code_art = str(c0).strip()
-                    fourn = str(c2).strip()
-                    mnt = nettoyer_nombre(c12)
-                    sf = extraire_sous_famille_achat(code_art)
-                    if mnt != 0 and sf in FAMILLES_VALIDES and fourn != "":
-                        achats_batch.append((mois, code_art, sf, fourn, mnt))
+        nb_achats, nb_conso = 0, 0
+        for mois in LISTE_MOIS:
+            ws_achat = trouver_feuille(wb, "DB_Achats_", mois)
+            if ws_achat is not None:
+                for row in ws_achat.iter_rows(min_row=2, values_only=True):
+                    c0, c2, c12 = get_col(row, 0), get_col(row, 2), get_col(row, 12)
+                    if c0 is not None and c2 is not None and c12 is not None:
+                        code_art = str(c0).strip()
+                        fourn = str(c2).strip()
+                        mnt = nettoyer_nombre(c12)
+                        sf = extraire_sous_famille_achat(code_art)
+                        if mnt != 0 and sf in FAMILLES_VALIDES and fourn != "":
+                            c.execute(
+                                "INSERT INTO achats (mois, code_article, sous_famille, fournisseur, montant_ht) VALUES (?, ?, ?, ?, ?)",
+                                (mois, code_art, sf, fourn, mnt)
+                            )
+                            nb_achats += 1
 
-        ws_trans = trouver_feuille(wb, "DB_Transferts_", mois)
-        if ws_trans is not None:
-            nuit = nettoyer_nombre(ws_trans["B6"].value)
-            c.execute("UPDATE nuitees SET nb_nuitees = ? WHERE mois = ?", (nuit, mois))
+            ws_trans = trouver_feuille(wb, "DB_Transferts_", mois)
+            if ws_trans is not None:
+                nuit = 0.0
+                for idx, row in enumerate(ws_trans.iter_rows(min_row=6, max_row=6, values_only=True)):
+                    nuit = nettoyer_nombre(get_col(row, 1))
+                c.execute("UPDATE nuitees SET nb_nuitees = ? WHERE mois = ?", (nuit, mois))
 
-        ws_indie = trouver_feuille(wb, "DB_Indicateurs_", mois)
-        if ws_indie is not None:
-            dept_nom, dept_code, sf_actuelle = "", "", "DIVERS"
-            for row in ws_indie.iter_rows(min_row=6, values_only=True):
-                val_a = str(get_col(row, 0) or "").replace("\xa0", " ").strip()
-                if val_a == "":
-                    continue
-                val_up = val_a.upper()
-                if "DÉPARTEMENT" in val_up or "DEPARTEMENT" in val_up:
-                    if ":" in val_a:
-                        dept_nom = val_a.split(":", 1).pop(1).strip()
-                    else:
-                        dept_nom = val_a.replace("DÉPARTEMENT", "").replace("DEPARTEMENT", "").strip()
-                    dept_code = nom_to_code.get(dept_nom.upper(), dept_nom.upper())
-                elif "SOUS-FAMILLE" in val_up or "SOUS FAMILLE" in val_up:
-                    sf_actuelle = val_a.split(":", 1).pop(1).strip() if ":" in val_a else val_a
-                elif not val_up.startswith("TOTAL") and not val_up.startswith("RAPPORT") and dept_nom != "":
-                    qte = nettoyer_nombre(get_col(row, 1))
-                    val = nettoyer_nombre(get_col(row, 2))
-                    if qte != 0 or val != 0:
-                        transferts_batch.append((mois, dept_code, dept_nom, sf_actuelle, "", val_a, qte, val))
+            ws_indie = trouver_feuille(wb, "DB_Indicateurs_", mois)
+            if ws_indie is not None:
+                dept_nom, dept_code, sf_actuelle = "", "", "DIVERS"
+                for row in ws_indie.iter_rows(min_row=6, values_only=True):
+                    val_a = str(get_col(row, 0) or "").replace("\xa0", " ").strip()
+                    if val_a == "":
+                        continue
+                    val_up = val_a.upper()
+                    if "DÉPARTEMENT" in val_up or "DEPARTEMENT" in val_up:
+                        if ":" in val_a:
+                            dept_nom = val_a.split(":", 1).pop(1).strip()
+                        else:
+                            dept_nom = val_a.replace("DÉPARTEMENT", "").replace("DEPARTEMENT", "").strip()
+                        dept_code = nom_to_code.get(dept_nom.upper(), dept_nom.upper())
+                    elif "SOUS-FAMILLE" in val_up or "SOUS FAMILLE" in val_up:
+                        sf_actuelle = val_a.split(":", 1).pop(1).strip() if ":" in val_a else val_a
+                    elif not val_up.startswith("TOTAL") and not val_up.startswith("RAPPORT") and dept_nom != "":
+                        qte = nettoyer_nombre(get_col(row, 1))
+                        val = nettoyer_nombre(get_col(row, 2))
+                        if qte != 0 or val != 0:
+                            c.execute("""INSERT INTO transferts 
+                                (mois, code_dept, nom_dept, sous_famille, code_article, designation, qte_conso, val_conso)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                                (mois, dept_code, dept_nom, sf_actuelle, "", val_a, qte, val))
+                            nb_conso += 1
 
-    if achats_batch:
-        if db_url:
-            execute_values(c._cursor, "INSERT INTO achats (mois, code_article, sous_famille, fournisseur, montant_ht) VALUES %s", achats_batch)
-        else:
-            c._cursor.executemany("INSERT INTO achats (mois, code_article, sous_famille, fournisseur, montant_ht) VALUES (?, ?, ?, ?, ?)", achats_batch)
-
-    if transferts_batch:
-        if db_url:
-            execute_values(c._cursor, "INSERT INTO transferts (mois, code_dept, nom_dept, sous_famille, code_article, designation, qte_conso, val_conso) VALUES %s", transferts_batch)
-        else:
-            c._cursor.executemany("INSERT INTO transferts (mois, code_dept, nom_dept, sous_famille, code_article, designation, qte_conso, val_conso) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", transferts_batch)
-
-    conn.commit()
-    conn.close()
-    return len(achats_batch), len(transferts_batch)
+        conn.commit()
+        c.close()
+        return nb_achats, nb_conso
+    finally:
+        wb.close()
+        conn.close()

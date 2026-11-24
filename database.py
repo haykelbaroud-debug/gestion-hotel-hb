@@ -1480,3 +1480,92 @@ def calculer_couts_reels_inventaire(code_dept, num_inv_debut, num_inv_fin):
         return resultats
     finally:
         conn.close()
+# ==============================================================================
+# MODULE SAUVEGARDE & RESTAURATION DE LA BASE DE DONNÉES
+# ==============================================================================
+
+def lire_fichier_base_octets():
+    """
+    Exporte une copie propre et cohérente de la base SQLite en mémoire (octets).
+    """
+    import os
+    import tempfile
+    conn_src = get_connection()
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".db") as tmp:
+            tmp_path = tmp.name
+        conn_dst = sqlite3.connect(tmp_path)
+        conn_src.backup(conn_dst)
+        conn_dst.close()
+        with open(tmp_path, "rb") as f:
+            return f.read()
+    finally:
+        conn_src.close()
+        if tmp_path and os.path.exists(tmp_path):
+            os.remove(tmp_path)
+
+def restaurer_base_depuis_octets(contenu_bytes):
+    """
+    Vérifie l'intégrité du fichier .db envoyé et remplace proprement la base active.
+    """
+    import os
+    import tempfile
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".db") as tmp:
+            tmp.write(contenu_bytes)
+            tmp_path = tmp.name
+
+        # Vérification que le fichier est bien une base SQLite valide
+        conn_test = sqlite3.connect(tmp_path)
+        c_test = conn_test.cursor()
+        c_test.execute("PRAGMA integrity_check;")
+        res = c_test.fetchone()
+        if not res or itemgetter(0)(res).lower() != "ok":
+            conn_test.close()
+            return False, "Le fichier sélectionné n'est pas une base SQLite valide ou est corrompu."
+
+        # Copie sécurisée vers la base active
+        conn_active = get_connection()
+        conn_test.backup(conn_active)
+        conn_active.close()
+        conn_test.close()
+        return True, "Base de données restaurée avec succès ! Toutes vos données ont été récupérées."
+    except Exception as e:
+        return False, f"Erreur lors de la restauration : {e}"
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            os.remove(tmp_path)
+
+def statistique_tables_base():
+    """
+    Retourne le nombre d'enregistrements dans chaque table principale pour contrôle.
+    """
+    tables = [
+        ("Classes", "classes"),
+        ("Familles", "familles"),
+        ("Sous-Familles", "sous_familles"),
+        ("Articles", "articles"),
+        ("Fournisseurs", "fournisseurs"),
+        ("Départements", "departements"),
+        ("Bons Achats / Mouvements", "doc_achats"),
+        ("Demandes & Bons Transfert", "doc_transferts"),
+        ("Inventaires Physiques", "inventaires"),
+        ("Lignes Achats (Import Excel)", "achats"),
+        ("Lignes Conso (Import Excel)", "transferts")
+    ]
+    conn = get_connection()
+    stats = []
+    try:
+        c = conn.cursor()
+        for label, tbl in tables:
+            try:
+                c.execute(f"SELECT COUNT(*) FROM {tbl}")
+                nb = itemgetter(0)(c.fetchone())
+            except Exception:
+                nb = 0
+            stats.append((label, nb))
+        return stats
+    finally:
+        conn.close()

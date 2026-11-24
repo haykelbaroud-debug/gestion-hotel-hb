@@ -560,3 +560,184 @@ def supprimer_departement(code_court):
         return True, "Département supprimé."
     finally:
         conn.close()
+# ==============================================================================
+# MODULE 3 : ACHATS & MOUVEMENTS DE STOCK (BC, BR, RETOUR, ENTRÉE/SORTIE DIRECTE)
+# ==============================================================================
+
+def initialiser_achats_m3():
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        # Ajout du droit de réception d'achat sur les départements
+        try:
+            c.execute("ALTER TABLE departements ADD COLUMN autorise_achat INTEGER DEFAULT 0")
+        except Exception:
+            pass
+
+        # Création automatique du département Économat (ECO) autorisé aux achats par défaut
+        c.execute("""
+            INSERT OR IGNORE INTO departements (code_court, nom_long, actif, autorise_achat)
+            VALUES ('ECO', 'Économat Central', 1, 1)
+        """)
+        c.execute("UPDATE departements SET autorise_achat = 1 WHERE UPPER(code_court) = 'ECO'")
+
+        # Entêtes des documents d'achats et mouvements
+        c.execute("""CREATE TABLE IF NOT EXISTS doc_achats (
+            numero TEXT PRIMARY KEY,
+            type_doc TEXT NOT NULL,
+            date_doc TEXT NOT NULL,
+            code_fournisseur TEXT DEFAULT '',
+            code_dept TEXT DEFAULT 'ECO',
+            ref_externe TEXT DEFAULT '',
+            observation TEXT DEFAULT '',
+            statut TEXT DEFAULT 'VALIDÉ',
+            total_ht REAL DEFAULT 0.0,
+            total_ttc REAL DEFAULT 0.0
+        )""")
+
+        # Lignes d'articles des documents
+        c.execute("""CREATE TABLE IF NOT EXISTS doc_achats_lignes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            numero_doc TEXT NOT NULL,
+            code_article TEXT NOT NULL,
+            designation TEXT NOT NULL,
+            unite TEXT DEFAULT 'Unité',
+            qte REAL NOT NULL,
+            prix_unitaire_ht REAL NOT NULL,
+            tva REAL DEFAULT 19.0,
+            montant_ht REAL NOT NULL,
+            montant_ttc REAL NOT NULL,
+            FOREIGN KEY (numero_doc) REFERENCES doc_achats(numero)
+        )""")
+        conn.commit()
+        c.close()
+    finally:
+        conn.close()
+
+def basculer_autorisation_achat_dept(code_court, autorise):
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("UPDATE departements SET autorise_achat = ? WHERE code_court = ?", (int(autorise), code_court))
+        conn.commit()
+    finally:
+        conn.close()
+
+def lister_depts_achats():
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("""
+            SELECT code_court, nom_long
+            FROM departements
+            WHERE COALESCE(actif, 1) = 1 AND COALESCE(autorise_achat, 0) = 1
+            ORDER BY CASE WHEN code_court = 'ECO' THEN 0 ELSE 1 END, code_court
+        """)
+        return c.fetchall()
+    finally:
+        conn.close()
+
+def generer_numero_doc(prefixe, annee="2026"):
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        motif = f"{prefixe}-{annee}-%"
+        c.execute("SELECT numero FROM doc_achats WHERE numero LIKE ? ORDER BY numero DESC LIMIT 1", (motif,))
+        res = c.fetchone()
+        if res:
+            dernier_num = itemgetter(0)(res)
+            try:
+                seq = int(dernier_num.split("-").pop()) + 1
+            except Exception:
+                seq = 1
+        else:
+            seq = 1
+        return f"{prefixe}-{annee}-{seq:04d}"
+    finally:
+        conn.close()
+
+def enregistrer_document_achat(numero, type_doc, date_doc, code_fourn, code_dept, ref_ext, obs, lignes, creation=True):
+    """
+    lignes : liste de tuples (code_article, designation, unite, qte, prix_ht, tva)
+    """
+    if not lignes:
+        return False, "Veuillez ajouter au moins une ligne d'article."
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        tot_ht = 0.0
+        tot_ttc = 0.0
+        lignes_calc = []
+        for code_a, des_a, u_a, qte, pu_ht, tva in lignes:
+            m_ht = round(float(qte) * float(pu_ht), 3)
+            m_ttc = round(m_ht * (1.0 + float(tva) / 100.0), 3)
+            tot_ht += m_ht
+            tot_ttc += m_ttc
+            lignes_calc.append((code_a, des_a, u_a, float(qte), float(pu_ht), float(tva), m_ht, m_ttc))
+
+        if creation:
+            c.execute("""INSERT INTO doc_achats
+                (numero, type_doc, date_doc, code_fournisseur, code_dept, ref_externe, observation, statut, total_ht, total_ttc)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'VALIDÉ', ?, ?)""",
+                (numero, type_doc, str(date_doc), code_fourn, code_dept, ref_ext.strip(), obs.strip(), round(tot_ht, 3), round(tot_ttc, 3)))
+        else:
+            c.execute("""UPDATE doc_achats
+                SET date_doc = ?, code_fournisseur = ?, code_dept = ?, ref_externe = ?, observation = ?, total_ht = ?, total_ttc = ?
+                WHERE numero = ?""",
+                (str(date_doc), code_fourn, code_dept, ref_ext.strip(), obs.strip(), round(tot_ht, 3), round(tot_ttc, 3), numero))
+            c.execute("DELETE FROM doc_achats_lignes WHERE numero_doc = ?", (numero,))
+
+        for code_a, des_a, u_a, qte, pu_ht, tva, m_ht, m_ttc in lignes_calc:
+            c.execute("""INSERT INTO doc_achats_lignes
+                (numero_doc, code_article, designation, unite, qte, prix_unitaire_ht, tva, montant_ht, montant_ttc)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (numero, code_a, des_a, u_a, qte, pu_ht, tva, m_ht, m_ttc))
+            # Mise à jour automatique du dernier prix d'achat lors d'un Bon de Réception (BR) ou Entrée Directe (ED)
+            if type_doc in ("BR", "ED") and pu_ht > 0:
+                c.execute("UPDATE articles SET prix_achat = ? WHERE code = ?", (pu_ht, code_a))
+
+        conn.commit()
+        return True, f"Document {numero} enregistré avec succès ({tot_ttc:,.3f} DT TTC)."
+    finally:
+        conn.close()
+
+def lister_documents_achat(type_doc):
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("""
+            SELECT d.numero, d.date_doc, COALESCE(f.nom, d.code_fournisseur), d.code_dept,
+                   d.ref_externe, d.total_ht, d.total_ttc, d.observation, d.code_fournisseur
+            FROM doc_achats d
+            LEFT JOIN fournisseurs f ON d.code_fournisseur = f.code
+            WHERE d.type_doc = ?
+            ORDER BY d.date_doc DESC, d.numero DESC
+        """, (type_doc,))
+        return c.fetchall()
+    finally:
+        conn.close()
+
+def lire_lignes_document(numero_doc):
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("""
+            SELECT code_article, designation, unite, qte, prix_unitaire_ht, tva, montant_ht, montant_ttc
+            FROM doc_achats_lignes
+            WHERE numero_doc = ?
+            ORDER BY id
+        """, (numero_doc,))
+        return c.fetchall()
+    finally:
+        conn.close()
+
+def supprimer_document_achat(numero_doc):
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("DELETE FROM doc_achats_lignes WHERE numero_doc = ?", (numero_doc,))
+        c.execute("DELETE FROM doc_achats WHERE numero = ?", (numero_doc,))
+        conn.commit()
+        return True, f"Document {numero_doc} supprimé."
+    finally:
+        conn.close()

@@ -15,6 +15,7 @@ st.set_page_config(
 
 db.initialiser_base()
 db.initialiser_parametrage()
+db.initialiser_referentiels_m2()
 
 def generer_excel_memoire(titre, entetes, lignes):
     import openpyxl
@@ -80,7 +81,7 @@ if not st.session_state.authentifie:
 st.sidebar.title("Navigation")
 menu = st.sidebar.radio(
     "Choisir un module :",
-    ["📊 Rapport Exécutif", "🛒 Achats & Stratégie", "🍽️ Consommations", "⚙️ Paramétrage de base", "📥 Import Excel"]
+    ["📊 Rapport Exécutif", "🛒 Achats & Stratégie", "🍽️ Consommations", "⚙️ Paramétrage de base", "🗂️ Base de données", "📥 Import Excel"]
 )
 
 if st.sidebar.button("🔒 Verrouiller"):
@@ -604,3 +605,229 @@ elif menu == "⚙️ Paramétrage de base":
                 st.dataframe(df_sf, use_container_width=True, hide_index=True)
             else:
                 st.info("Aucune sous-famille enregistrée.")
+elif menu == "🗂️ Base de données":
+    from operator import itemgetter
+    btab1, btab2, btab3 = st.tabs(["📦 Base Articles", "🚚 Base Fournisseurs", "🏢 Base Départements"])
+
+    # ---------------- ONGLET 1 : ARTICLES ----------------
+    with btab1:
+        col_form, col_liste = st.columns(2)
+        articles = db.lister_articles_complet()
+        dict_art = {itemgetter(0)(r): r for r in articles}
+        sf_actives = db.lister_sous_familles(seulement_actives=True)
+        toutes_sf = db.lister_sous_familles()
+
+        with col_form:
+            st.subheader("Fiche Article")
+            mode_art = st.radio("Action :", ["➕ Ajouter", "✏️ Modifier / Statut / Supprimer"], key="mode_art", horizontal=True)
+            unites_std = ["Kg", "Litre", "Pièce", "Carton", "Boîte", "Bouteille", "Sac", "Paquet", "Unité"]
+
+            if mode_art == "➕ Ajouter":
+                if sf_actives:
+                    map_sf_act = {
+                        itemgetter(0)(r): f"[{itemgetter(4)(r)} > {itemgetter(2)(r)}] {itemgetter(0)(r)} - {itemgetter(1)(r)}"
+                        for r in sf_actives
+                    }
+                    a_sf = st.selectbox("Sous-famille (Classe > Famille > SF) :", list(map_sf_act.keys()),
+                                        format_func=lambda x: map_sf_act[x], key="add_art_sf")
+                    a_code = st.text_input("Code Article :", key="add_art_code")
+                    a_des = st.text_input("Désignation :", key="add_art_des")
+                    c_u, c_p, c_t = st.columns(3)
+                    a_unite = c_u.selectbox("Unité :", unites_std, key="add_art_u")
+                    a_prix = c_p.number_input("Prix Achat HT :", min_value=0.0, step=0.100, format="%.3f", key="add_art_p")
+                    a_tva = c_t.selectbox("TVA (%) :", [19.0, 13.0, 7.0, 0.0], key="add_art_t")
+                    a_act = st.checkbox("Actif", value=True, key="add_art_act")
+                    if st.button("Enregistrer l'Article", type="primary", key="btn_add_art"):
+                        if a_code.strip() and a_des.strip():
+                            ok, msg = db.sauvegarder_article(a_code, a_des, a_sf, a_unite, a_prix, a_tva, a_act, creation=True)
+                            if ok:
+                                st.success(msg)
+                                st.rerun()
+                            else:
+                                st.error(msg)
+                        else:
+                            st.warning("Veuillez remplir le code et la désignation.")
+                else:
+                    st.warning("Créez et activez d'abord au moins une Sous-famille dans 'Paramétrage de base'.")
+            else:
+                if dict_art:
+                    sel_art = st.selectbox("Sélectionner un article :", list(dict_art.keys()),
+                                           format_func=lambda x: f"{x} - {itemgetter(1)(dict_art[x])}", key="sel_edit_art")
+                    _, des_a, sf_a, _, _, _, unite_a, prix_a, tva_a, act_a = dict_art[sel_art]
+                    map_sf_all = {
+                        itemgetter(0)(r): f"[{itemgetter(4)(r)} > {itemgetter(2)(r)}] {itemgetter(0)(r)} - {itemgetter(1)(r)}"
+                        for r in toutes_sf
+                    }
+                    if sf_a and sf_a not in map_sf_all:
+                        map_sf_all[sf_a] = f"{sf_a} (Import Excel)"
+                    liste_keys_sf = list(map_sf_all.keys())
+                    idx_sf = liste_keys_sf.index(sf_a) if sf_a in liste_keys_sf else 0
+                    new_sf_a = st.selectbox("Sous-famille :", liste_keys_sf, index=idx_sf,
+                                            format_func=lambda x: map_sf_all[x], key="edit_art_sf") if liste_keys_sf else sf_a
+                    new_des_a = st.text_input("Désignation :", value=des_a, key="edit_art_des")
+                    c_u, c_p, c_t = st.columns(3)
+                    idx_u = unites_std.index(unite_a) if unite_a in unites_std else 0
+                    new_u_a = c_u.selectbox("Unité :", unites_std, index=idx_u, key="edit_art_u")
+                    new_p_a = c_p.number_input("Prix Achat HT :", value=float(prix_a), min_value=0.0, step=0.100, format="%.3f", key="edit_art_p")
+                    tvas = [19.0, 13.0, 7.0, 0.0]
+                    idx_t = tvas.index(float(tva_a)) if float(tva_a) in tvas else 0
+                    new_t_a = c_t.selectbox("TVA (%) :", tvas, index=idx_t, key="edit_art_t")
+                    new_act_a = st.checkbox("Actif", value=bool(act_a), key="edit_art_act")
+                    b1, b2 = st.columns(2)
+                    if b1.button("💾 Mettre à jour", type="primary", key="btn_upd_art"):
+                        ok, msg = db.sauvegarder_article(sel_art, new_des_a, new_sf_a, new_u_a, new_p_a, new_t_a, new_act_a, creation=False)
+                        st.success(msg)
+                        st.rerun()
+                    if b2.button("🗑️ Supprimer", key="btn_del_art"):
+                        ok, msg = db.supprimer_article(sel_art)
+                        if ok:
+                            st.success(msg)
+                            st.rerun()
+                        else:
+                            st.error(msg)
+                else:
+                    st.info("Aucun article enregistré.")
+
+        with col_liste:
+            st.subheader("Liste des Articles")
+            filtre_art = st.text_input("🔍 Rechercher (code ou désignation) :", key="rech_art")
+            if articles:
+                lignes_art = []
+                for r in articles:
+                    if filtre_art.strip() == "" or filtre_art.lower() in itemgetter(0)(r).lower() or filtre_art.lower() in itemgetter(1)(r).lower():
+                        lignes_art.append({
+                            "Code": itemgetter(0)(r),
+                            "Désignation": itemgetter(1)(r),
+                            "Sous-Famille": itemgetter(2)(r),
+                            "Unité": itemgetter(6)(r),
+                            "Prix HT": f"{itemgetter(7)(r):,.3f}",
+                            "TVA": f"{itemgetter(8)(r):.0f}%",
+                            "Statut": "✅ Actif" if itemgetter(9)(r) == 1 else "⛔ Désactivé"
+                        })
+                st.dataframe(pd.DataFrame(lignes_art), use_container_width=True, hide_index=True, height=450)
+            else:
+                st.info("Aucun article enregistré.")
+    # ---------------- ONGLET 2 : FOURNISSEURS ----------------
+    with btab2:
+        col_form, col_liste = st.columns(2)
+        fournisseurs = db.lister_fournisseurs()
+        dict_fourn = {itemgetter(0)(r): r for r in fournisseurs}
+
+        with col_form:
+            st.subheader("Fiche Fournisseur")
+            mode_fourn = st.radio("Action :", ["➕ Ajouter", "✏️ Modifier / Statut / Supprimer"], key="mode_fourn", horizontal=True)
+            if mode_fourn == "➕ Ajouter":
+                fn_code = st.text_input("Code Fournisseur :", key="add_fn_code")
+                fn_nom = st.text_input("Nom / Raison sociale :", key="add_fn_nom")
+                fn_tel = st.text_input("Téléphone :", key="add_fn_tel")
+                fn_mf = st.text_input("Matricule Fiscal :", key="add_fn_mf")
+                fn_mail = st.text_input("Email :", key="add_fn_mail")
+                fn_act = st.checkbox("Actif", value=True, key="add_fn_act")
+                if st.button("Enregistrer le Fournisseur", type="primary", key="btn_add_fn"):
+                    if fn_code.strip() and fn_nom.strip():
+                        ok, msg = db.sauvegarder_fournisseur(fn_code, fn_nom, fn_tel, fn_mf, fn_mail, fn_act, creation=True)
+                        if ok:
+                            st.success(msg)
+                            st.rerun()
+                        else:
+                            st.error(msg)
+                    else:
+                        st.warning("Veuillez remplir le code et le nom.")
+            else:
+                if dict_fourn:
+                    sel_fn = st.selectbox("Sélectionner un fournisseur :", list(dict_fourn.keys()),
+                                          format_func=lambda x: f"{x} - {itemgetter(1)(dict_fourn[x])}", key="sel_edit_fn")
+                    _, nom_fn, tel_fn, mf_fn, mail_fn, act_fn = dict_fourn[sel_fn]
+                    new_nom_fn = st.text_input("Nom / Raison sociale :", value=nom_fn, key="edit_fn_nom")
+                    new_tel_fn = st.text_input("Téléphone :", value=tel_fn, key="edit_fn_tel")
+                    new_mf_fn = st.text_input("Matricule Fiscal :", value=mf_fn, key="edit_fn_mf")
+                    new_mail_fn = st.text_input("Email :", value=mail_fn, key="edit_fn_mail")
+                    new_act_fn = st.checkbox("Actif", value=bool(act_fn), key="edit_fn_act")
+                    b1, b2 = st.columns(2)
+                    if b1.button("💾 Mettre à jour", type="primary", key="btn_upd_fn"):
+                        ok, msg = db.sauvegarder_fournisseur(sel_fn, new_nom_fn, new_tel_fn, new_mf_fn, new_mail_fn, new_act_fn, creation=False)
+                        st.success(msg)
+                        st.rerun()
+                    if b2.button("🗑️ Supprimer", key="btn_del_fn"):
+                        ok, msg = db.supprimer_fournisseur(sel_fn)
+                        st.success(msg)
+                        st.rerun()
+                else:
+                    st.info("Aucun fournisseur enregistré.")
+
+        with col_liste:
+            st.subheader("Liste des Fournisseurs")
+            if fournisseurs:
+                df_fn = pd.DataFrame([
+                    {
+                        "Code": itemgetter(0)(r),
+                        "Nom": itemgetter(1)(r),
+                        "Téléphone": itemgetter(2)(r),
+                        "Matricule Fiscal": itemgetter(3)(r),
+                        "Statut": "✅ Actif" if itemgetter(5)(r) == 1 else "⛔ Désactivé"
+                    }
+                    for r in fournisseurs
+                ])
+                st.dataframe(df_fn, use_container_width=True, hide_index=True)
+            else:
+                st.info("Aucun fournisseur enregistré.")
+
+    # ---------------- ONGLET 3 : DÉPARTEMENTS ----------------
+    with btab3:
+        col_form, col_liste = st.columns(2)
+        depts = db.lister_departements_complet()
+        dict_dept = {itemgetter(0)(r): r for r in depts}
+
+        with col_form:
+            st.subheader("Fiche Département")
+            mode_dept = st.radio("Action :", ["➕ Ajouter", "✏️ Modifier / Statut / Supprimer"], key="mode_dept", horizontal=True)
+            if mode_dept == "➕ Ajouter":
+                dp_code = st.text_input("Code Court (ex: CUIS, BAR) :", key="add_dp_code")
+                dp_nom = st.text_input("Nom Complet du Département :", key="add_dp_nom")
+                dp_act = st.checkbox("Actif", value=True, key="add_dp_act")
+                if st.button("Enregistrer le Département", type="primary", key="btn_add_dp"):
+                    if dp_code.strip() and dp_nom.strip():
+                        ok, msg = db.sauvegarder_departement(dp_code, dp_nom, dp_act, creation=True)
+                        if ok:
+                            st.success(msg)
+                            st.rerun()
+                        else:
+                            st.error(msg)
+                    else:
+                        st.warning("Veuillez remplir le code court et le nom.")
+            else:
+                if dict_dept:
+                    sel_dp = st.selectbox("Sélectionner un département :", list(dict_dept.keys()),
+                                          format_func=lambda x: f"{x} - {itemgetter(1)(dict_dept[x])}", key="sel_edit_dp")
+                    _, nom_dp, act_dp = dict_dept[sel_dp]
+                    new_nom_dp = st.text_input("Nom Complet :", value=nom_dp, key="edit_dp_nom")
+                    new_act_dp = st.checkbox("Actif", value=bool(act_dp), key="edit_dp_act")
+                    b1, b2 = st.columns(2)
+                    if b1.button("💾 Mettre à jour", type="primary", key="btn_upd_dp"):
+                        ok, msg = db.sauvegarder_departement(sel_dp, new_nom_dp, new_act_dp, creation=False)
+                        st.success(msg)
+                        st.rerun()
+                    if b2.button("🗑️ Supprimer", key="btn_del_dp"):
+                        ok, msg = db.supprimer_departement(sel_dp)
+                        if ok:
+                            st.success(msg)
+                            st.rerun()
+                        else:
+                            st.error(msg)
+                else:
+                    st.info("Aucun département enregistré.")
+
+        with col_liste:
+            st.subheader("Liste des Départements")
+            if depts:
+                df_dp = pd.DataFrame([
+                    {
+                        "Code": itemgetter(0)(r),
+                        "Nom Département": itemgetter(1)(r),
+                        "Statut": "✅ Actif" if itemgetter(2)(r) == 1 else "⛔ Désactivé"
+                    }
+                    for r in depts
+                ])
+                st.dataframe(df_dp, use_container_width=True, hide_index=True)
+            else:
+                st.info("Aucun département enregistré.")

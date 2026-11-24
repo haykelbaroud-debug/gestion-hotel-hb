@@ -17,6 +17,7 @@ db.initialiser_base()
 db.initialiser_parametrage()
 db.initialiser_referentiels_m2()
 db.initialiser_achats_m3()
+db.initialiser_transferts_m4()
 
 def generer_excel_memoire(titre, entetes, lignes):
     import openpyxl
@@ -82,7 +83,7 @@ if not st.session_state.authentifie:
 st.sidebar.title("Navigation")
 menu = st.sidebar.radio(
     "Choisir un module :",
-    ["📊 Rapport Exécutif", "🛒 Achats & Stratégie", "🍽️ Consommations", "⚙️ Paramétrage de base", "🗂️ Base de données", "🧾 Achats & Mouvements", "📥 Import Excel"]
+    ["📊 Rapport Exécutif", "🛒 Achats & Stratégie", "🍽️ Consommations", "⚙️ Paramétrage de base", "🗂️ Base de données", "🧾 Achats & Mouvements", "🔄 Transferts", "📥 Import Excel"]
 )
 
 if st.sidebar.button("🔒 Verrouiller"):
@@ -1057,3 +1058,320 @@ elif menu == "🧾 Achats & Mouvements":
                     if cc.button("✅ Activer achats", key=f"ena_auth_{dp_code}"):
                         db.basculer_autorisation_achat_dept(dp_code, 1)
                         st.rerun()
+elif menu == "🔄 Transferts":
+    from operator import itemgetter
+    from datetime import date
+
+    ttab1, ttab2, ttab3 = st.tabs([
+        "📋 Demande de Transfert",
+        "✅ Validation Transferts",
+        "🚚 Bon de Transfert Direct"
+    ])
+
+    articles_actifs = db.lister_articles_complet(seulement_actifs=True)
+    depts_actifs = db.lister_departements_complet(seulement_actifs=True)
+    map_depts_t = {itemgetter(0)(d): f"{itemgetter(0)(d)} - {itemgetter(1)(d)}" for d in depts_actifs}
+    liste_codes_depts = list(map_depts_t.keys())
+    idx_eco = liste_codes_depts.index("ECO") if "ECO" in liste_codes_depts else 0
+
+    with ttab1:
+        mode_dt = st.radio("Opération :", ["➕ Nouvelle Demande", "📋 Consulter / Modifier / Supprimer"], key="mode_dt", horizontal=True)
+        if "panier_DT" not in st.session_state:
+            st.session_state["panier_DT"] = []
+
+        if mode_dt == "➕ Nouvelle Demande":
+            if not articles_actifs or len(liste_codes_depts) < 2:
+                st.warning("Assurez-vous d'avoir au moins 1 article actif et 2 départements actifs.")
+            else:
+                num_dt = db.generer_numero_transfert("DT", str(date.today().year))
+                c1, c2, c3, c4 = st.columns(4)
+                c1.text_input("N° Demande :", value=num_dt, disabled=True, key="num_dt_new")
+                date_dt = c2.date_input("Date Demande :", value=date.today(), key="date_dt_new")
+                src_dt = c3.selectbox("Dépôt Source :", liste_codes_depts, index=idx_eco,
+                                      format_func=lambda x: map_depts_t[x], key="src_dt_new")
+                autres_depts = [d for d in liste_codes_depts if d != src_dt]
+                dst_dt = c4.selectbox("Département Demandeur :", autres_depts,
+                                      format_func=lambda x: map_depts_t[x], key="dst_dt_new")
+                obs_dt = st.text_input("Observation / Besoin :", key="obs_dt_new")
+
+                map_art_t = {itemgetter(0)(a): f"{itemgetter(0)(a)} - {itemgetter(1)(a)} ({itemgetter(6)(a)})" for a in articles_actifs}
+                dict_art_t = {itemgetter(0)(a): a for a in articles_actifs}
+
+                ca1, ca2, ca3, ca4 = st.columns([3, 1.5, 1.5, 1.5])
+                art_dt = ca1.selectbox("Article demandé :", list(map_art_t.keys()), format_func=lambda x: map_art_t[x], key="art_sel_dt")
+                info_a = dict_art_t[art_dt]
+                stock_dispo_dt = db.calculer_stock_article_dept(art_dt, src_dt)
+                ca2.metric(f"Stock {src_dt}", f"{stock_dispo_dt:,.3f} {itemgetter(6)(info_a)}")
+                qte_dt = ca3.number_input("Qté demandée :", min_value=0.001, value=1.0, step=1.0, format="%.3f", key="qte_sel_dt")
+
+                if ca4.button("➕ Ajouter", key="btn_add_line_dt"):
+                    st.session_state["panier_DT"].append((
+                        art_dt, itemgetter(1)(info_a), itemgetter(6)(info_a), qte_dt, qte_dt, float(itemgetter(7)(info_a))
+                    ))
+                    st.rerun()
+
+                if st.session_state["panier_DT"]:
+                    st.dataframe(pd.DataFrame([
+                        {
+                            "Code": itemgetter(0)(x),
+                            "Désignation": itemgetter(1)(x),
+                            "Unité": itemgetter(2)(x),
+                            "Qté Demandée": f"{itemgetter(3)(x):,.3f}",
+                            "Stock Actuel Source": f"{db.calculer_stock_article_dept(itemgetter(0)(x), src_dt):,.3f}"
+                        }
+                        for x in st.session_state["panier_DT"]
+                    ]), use_container_width=True, hide_index=True)
+
+                    b1, b2 = st.columns(2)
+                    if b1.button("💾 Enregistrer la Demande", type="primary", key="save_dt"):
+                        ok, msg = db.enregistrer_transfert(
+                            num_dt, "DT", date_dt, src_dt, dst_dt, "EN ATTENTE", obs_dt, st.session_state["panier_DT"], creation=True
+                        )
+                        if ok:
+                            st.session_state["panier_DT"] = []
+                            st.success(msg)
+                            st.rerun()
+                        else:
+                            st.error(msg)
+                    if b2.button("🧹 Vider", key="clear_dt"):
+                        st.session_state["panier_DT"] = []
+                        st.rerun()
+        else:
+            demandes = db.lister_transferts("DT")
+            if demandes:
+                st.dataframe(pd.DataFrame([
+                    {
+                        "N° Demande": itemgetter(0)(d),
+                        "Date": itemgetter(1)(d),
+                        "Source": itemgetter(2)(d),
+                        "Demandeur": itemgetter(3)(d),
+                        "Statut": itemgetter(4)(d),
+                        "Observation": itemgetter(5)(d)
+                    }
+                    for d in demandes
+                ]), use_container_width=True, hide_index=True)
+
+                dict_dt = {itemgetter(0)(d): d for d in demandes}
+                sel_dt = st.selectbox("Sélectionner une demande :", list(dict_dt.keys()), key="sel_view_dt")
+                info_dt = dict_dt[sel_dt]
+                lignes_dt = db.lire_lignes_transfert(sel_dt)
+                st.dataframe(pd.DataFrame([
+                    {
+                        "Code": itemgetter(0)(l),
+                        "Désignation": itemgetter(1)(l),
+                        "Unité": itemgetter(2)(l),
+                        "Qté Demandée": f"{itemgetter(3)(l):,.3f}",
+                        "Qté Accordée": f"{itemgetter(4)(l):,.3f}"
+                    }
+                    for l in lignes_dt
+                ]), use_container_width=True, hide_index=True)
+
+                if itemgetter(4)(info_dt) == "EN ATTENTE":
+                    with st.expander("✏️ Modifier les quantités de cette demande en attente"):
+                        new_obs_dt = st.text_input("Observation :", value=itemgetter(5)(info_dt), key="edit_obs_dt")
+                        lignes_mod = []
+                        for idx_l, l in enumerate(lignes_dt):
+                            mc1, mc2 = st.columns(2)
+                            mc1.text(f"{itemgetter(0)(l)} - {itemgetter(1)(l)}")
+                            nq = mc2.number_input("Qté demandée", value=float(itemgetter(3)(l)), min_value=0.0, step=1.0, format="%.3f", key=f"ed_dt_q_{idx_l}")
+                            if nq > 0:
+                                lignes_mod.append((itemgetter(0)(l), itemgetter(1)(l), itemgetter(2)(l), nq, nq, float(itemgetter(5)(l))))
+                        if st.button("💾 Enregistrer modification", type="primary", key="btn_upd_dt"):
+                            ok, msg = db.enregistrer_transfert(
+                                sel_dt, "DT", itemgetter(1)(info_dt), itemgetter(2)(info_dt), itemgetter(3)(info_dt),
+                                "EN ATTENTE", new_obs_dt, lignes_mod, creation=False
+                            )
+                            st.success(msg)
+                            st.rerun()
+
+                    if st.button(f"🗑️ Supprimer la demande {sel_dt}", key="btn_del_dt"):
+                        ok, msg = db.supprimer_transfert(sel_dt)
+                        st.success(msg)
+                        st.rerun()
+                else:
+                    st.info("Cette demande est déjà traitée (Générée ou Rejetée) et ne peut plus être modifiée.")
+            else:
+                st.info("Aucune demande de transfert enregistrée.")
+    with ttab2:
+        st.subheader("Demandes de transfert en attente de validation")
+        demandes_attente = db.lister_transferts("DT", statut_filtre="EN ATTENTE")
+        if not demandes_attente:
+            st.success("✅ Aucune demande de transfert en attente.")
+        else:
+            map_att = {
+                itemgetter(0)(d): f"{itemgetter(0)(d)} | {itemgetter(1)(d)} | {itemgetter(2)(d)} ➔ {itemgetter(3)(d)}"
+                for d in demandes_attente
+            }
+            dict_att = {itemgetter(0)(d): d for d in demandes_attente}
+            sel_val_dt = st.selectbox("Choisir la demande à traiter :", list(map_att.keys()), format_func=lambda x: map_att[x], key="sel_val_dt")
+            d_info = dict_att[sel_val_dt]
+            src_v = itemgetter(2)(d_info)
+            lignes_v = db.lire_lignes_transfert(sel_val_dt)
+
+            st.info(f"Dépôt source : **{src_v}** ➔ Département demandeur : **{itemgetter(3)(d_info)}** | Observation : {itemgetter(5)(d_info) or 'Aucune'}")
+            lignes_a_valider = []
+            tout_dispo = True
+
+            for idx_v, l in enumerate(lignes_v):
+                ca, da, ua, q_dem, _, pu, _ = l
+                dispo = db.calculer_stock_article_dept(ca, src_v)
+                vc1, vc2, vc3, vc4 = st.columns([3, 1.5, 1.5, 1.5])
+                vc1.write(f"**{ca}** - {da} ({ua})")
+                vc2.metric("Demandé", f"{q_dem:,.3f}")
+                vc3.metric(f"Stock {src_v}", f"{dispo:,.3f}")
+                q_acc = vc4.number_input("Qté Accordée :", min_value=0.0, value=float(q_dem), step=1.0, format="%.3f", key=f"val_q_{sel_val_dt}_{idx_v}")
+                if q_acc > dispo:
+                    tout_dispo = False
+                    st.error(f"⚠️ Stock insuffisant pour {ca} : disponible = {dispo:,.3f} {ua}, accordé = {q_acc:,.3f} {ua}")
+                lignes_a_valider.append((ca, da, ua, q_dem, q_acc, pu))
+
+            obs_val = st.text_input("Note de validation / motif de rejet :", key="obs_val_dt")
+            date_gen_bt = st.date_input("Date du Bon de Transfert généré :", value=date.today(), key="date_gen_bt")
+
+            bv1, bv2, bv3 = st.columns(3)
+            if bv1.button("✅ Générer & Valider le Transfert", type="primary", disabled=not tout_dispo, key="btn_gen_bt"):
+                ok, msg = db.valider_demande_et_generer_bt(sel_val_dt, date_gen_bt, lignes_a_valider, obs_val)
+                if ok:
+                    st.success(msg)
+                    st.rerun()
+                else:
+                    st.error(msg)
+
+            if bv2.button("⛔ Rejeter la demande", key="btn_rej_dt"):
+                ok, msg = db.changer_statut_demande(sel_val_dt, "REJETÉE")
+                st.warning(msg)
+                st.rerun()
+
+            if bv3.button("🗑️ Supprimer la demande", key="btn_sup_val_dt"):
+                ok, msg = db.supprimer_transfert(sel_val_dt)
+                st.success(msg)
+                st.rerun()
+    with ttab3:
+        mode_bt = st.radio("Opération :", ["➕ Nouveau Bon de Transfert Direct", "📋 Consulter / Modifier / Supprimer"], key="mode_bt", horizontal=True)
+        if "panier_BT" not in st.session_state:
+            st.session_state["panier_BT"] = []
+
+        if mode_bt == "➕ Nouveau Bon de Transfert Direct":
+            if not articles_actifs or len(liste_codes_depts) < 2:
+                st.warning("Assurez-vous d'avoir au moins 1 article actif et 2 départements actifs.")
+            else:
+                num_bt = db.generer_numero_transfert("BT", str(date.today().year))
+                c1, c2, c3, c4 = st.columns(4)
+                c1.text_input("N° Bon Transfert :", value=num_bt, disabled=True, key="num_bt_new")
+                date_bt = c2.date_input("Date Transfert :", value=date.today(), key="date_bt_new")
+                src_bt = c3.selectbox("Département Source :", liste_codes_depts, index=idx_eco,
+                                      format_func=lambda x: map_depts_t[x], key="src_bt_new")
+                autres_bt = [d for d in liste_codes_depts if d != src_bt]
+                dst_bt = c4.selectbox("Département Destinataire :", autres_bt,
+                                      format_func=lambda x: map_depts_t[x], key="dst_bt_new")
+                obs_bt = st.text_input("Observation :", key="obs_bt_new")
+
+                map_art_bt = {itemgetter(0)(a): f"{itemgetter(0)(a)} - {itemgetter(1)(a)} ({itemgetter(6)(a)})" for a in articles_actifs}
+                dict_art_bt = {itemgetter(0)(a): a for a in articles_actifs}
+
+                ca1, ca2, ca3, ca4 = st.columns([3, 1.5, 1.5, 1.5])
+                art_bt = ca1.selectbox("Article :", list(map_art_bt.keys()), format_func=lambda x: map_art_bt[x], key="art_sel_bt")
+                info_a_bt = dict_art_bt[art_bt]
+                stock_dispo_bt = db.calculer_stock_article_dept(art_bt, src_bt)
+                ca2.metric(f"Stock {src_bt}", f"{stock_dispo_bt:,.3f} {itemgetter(6)(info_a_bt)}")
+                qte_bt = ca3.number_input("Qté à transférer :", min_value=0.001, value=1.0, step=1.0, format="%.3f", key="qte_sel_bt")
+
+                if ca4.button("➕ Ajouter", key="btn_add_line_bt"):
+                    deja_panier = sum(itemgetter(4)(x) for x in st.session_state["panier_BT"] if itemgetter(0)(x) == art_bt)
+                    if (qte_bt + deja_panier) > stock_dispo_bt:
+                        st.error(f"Stock insuffisant dans {src_bt} ! Disponible : {stock_dispo_bt:,.3f} {itemgetter(6)(info_a_bt)}.")
+                    else:
+                        st.session_state["panier_BT"].append((
+                            art_bt, itemgetter(1)(info_a_bt), itemgetter(6)(info_a_bt), qte_bt, qte_bt, float(itemgetter(7)(info_a_bt))
+                        ))
+                        st.rerun()
+
+                if st.session_state["panier_BT"]:
+                    st.dataframe(pd.DataFrame([
+                        {
+                            "Code": itemgetter(0)(x),
+                            "Désignation": itemgetter(1)(x),
+                            "Unité": itemgetter(2)(x),
+                            "Qté Transférée": f"{itemgetter(4)(x):,.3f}",
+                            "PU HT": f"{itemgetter(5)(x):,.3f}",
+                            "Valeur HT": f"{itemgetter(4)(x) * itemgetter(5)(x):,.3f} DT"
+                        }
+                        for x in st.session_state["panier_BT"]
+                    ]), use_container_width=True, hide_index=True)
+
+                    b1, b2 = st.columns(2)
+                    if b1.button(f"💾 Valider & Enregistrer ({num_bt})", type="primary", key="save_bt"):
+                        ok, msg = db.enregistrer_transfert(
+                            num_bt, "BT", date_bt, src_bt, dst_bt, "VALIDÉ", obs_bt, st.session_state["panier_BT"], creation=True
+                        )
+                        if ok:
+                            st.session_state["panier_BT"] = []
+                            st.success(msg)
+                            st.rerun()
+                        else:
+                            st.error(msg)
+                    if b2.button("🧹 Vider", key="clear_bt"):
+                        st.session_state["panier_BT"] = []
+                        st.rerun()
+        else:
+            bons_bt = db.lister_transferts("BT")
+            if bons_bt:
+                st.dataframe(pd.DataFrame([
+                    {
+                        "N° Bon": itemgetter(0)(b),
+                        "Date": itemgetter(1)(b),
+                        "Source": itemgetter(2)(b),
+                        "Destination": itemgetter(3)(b),
+                        "Valeur HT": f"{itemgetter(7)(b):,.3f} DT",
+                        "Origine": itemgetter(6)(b) or "Direct",
+                        "Observation": itemgetter(5)(b)
+                    }
+                    for b in bons_bt
+                ]), use_container_width=True, hide_index=True)
+
+                dict_bt = {itemgetter(0)(b): b for b in bons_bt}
+                sel_bt = st.selectbox("Sélectionner un bon de transfert :", list(dict_bt.keys()), key="sel_view_bt")
+                info_bt = dict_bt[sel_bt]
+                lignes_bt = db.lire_lignes_transfert(sel_bt)
+                st.dataframe(pd.DataFrame([
+                    {
+                        "Code": itemgetter(0)(l),
+                        "Désignation": itemgetter(1)(l),
+                        "Unité": itemgetter(2)(l),
+                        "Qté Transférée": f"{itemgetter(4)(l):,.3f}",
+                        "PU HT": f"{itemgetter(5)(l):,.3f}",
+                        "Montant HT": f"{itemgetter(6)(l):,.3f} DT"
+                    }
+                    for l in lignes_bt
+                ]), use_container_width=True, hide_index=True)
+
+                with st.expander("✏️ Modifier les quantités de ce bon de transfert"):
+                    new_obs_bt = st.text_input("Observation :", value=itemgetter(5)(info_bt), key="edit_obs_bt")
+                    lignes_mod_bt = []
+                    for idx_l, l in enumerate(lignes_bt):
+                        ca = itemgetter(0)(l)
+                        dispo_mod = db.calculer_stock_article_dept(ca, itemgetter(2)(info_bt), ignorer_doc_transfert=sel_bt)
+                        mc1, mc2, mc3 = st.columns([3, 1.5, 1.5])
+                        mc1.text(f"{ca} - {itemgetter(1)(l)}")
+                        mc2.metric("Stock Max", f"{dispo_mod:,.3f}")
+                        nq = mc3.number_input("Nouvelle Qté", value=float(itemgetter(4)(l)), min_value=0.0, step=1.0, format="%.3f", key=f"ed_bt_q_{idx_l}")
+                        if nq > 0:
+                            lignes_mod_bt.append((ca, itemgetter(1)(l), itemgetter(2)(l), itemgetter(3)(l), nq, float(itemgetter(5)(l))))
+
+                    if st.button("💾 Mettre à jour le Bon", type="primary", key="btn_upd_bt"):
+                        ok, msg = db.enregistrer_transfert(
+                            sel_bt, "BT", itemgetter(1)(info_bt), itemgetter(2)(info_bt), itemgetter(3)(info_bt),
+                            "VALIDÉ", new_obs_bt, lignes_mod_bt, creation=False
+                        )
+                        if ok:
+                            st.success(msg)
+                            st.rerun()
+                        else:
+                            st.error(msg)
+
+                if st.button(f"🗑️ Supprimer le bon {sel_bt}", key="btn_del_bt"):
+                    ok, msg = db.supprimer_transfert(sel_bt)
+                    st.success(msg)
+                    st.rerun()
+            else:
+                st.info("Aucun bon de transfert enregistré.")

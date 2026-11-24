@@ -990,3 +990,255 @@ def supprimer_transfert(numero_doc):
         return True, f"Document {numero_doc} supprimé."
     finally:
         conn.close()
+# ==============================================================================
+# MODULE 5 : VISUALISATION DU STOCK & INVENTAIRE PHYSIQUE (CLÔTURE / DÉCLÔTURE)
+# ==============================================================================
+
+def initialiser_stock_inventaire_m5():
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("""CREATE TABLE IF NOT EXISTS inventaires (
+            numero TEXT PRIMARY KEY,
+            date_inv TEXT NOT NULL,
+            code_dept TEXT NOT NULL,
+            statut TEXT DEFAULT 'BROUILLON',
+            observation TEXT DEFAULT ''
+        )""")
+
+        c.execute("""CREATE TABLE IF NOT EXISTS inventaires_lignes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            numero_inv TEXT NOT NULL,
+            code_article TEXT NOT NULL,
+            designation TEXT NOT NULL,
+            unite TEXT DEFAULT 'Unité',
+            stock_theorique REAL DEFAULT 0.0,
+            stock_physique REAL DEFAULT 0.0,
+            ecart_qte REAL DEFAULT 0.0,
+            prix_unitaire_ht REAL DEFAULT 0.0,
+            valeur_ecart_ht REAL DEFAULT 0.0,
+            FOREIGN KEY (numero_inv) REFERENCES inventaires(numero)
+        )""")
+        conn.commit()
+        c.close()
+    finally:
+        conn.close()
+
+def lister_etat_stock_global():
+    """
+    Retourne le stock actuel de tous les articles actifs sur tous les départements actifs,
+    enrichi de Classe, Famille, Sous-famille, Unité, Prix HT et Valeur Stock HT.
+    """
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("""
+            SELECT a.code, a.designation, COALESCE(a.sous_famille, 'DIVERS'),
+                   COALESCE(sf.libelle, a.sous_famille, 'DIVERS'),
+                   COALESCE(f.code, 'DIVERS'), COALESCE(f.libelle, 'DIVERS'),
+                   COALESCE(cl.code, COALESCE(a.classe, 'DIVERS')), COALESCE(cl.libelle, COALESCE(a.classe, 'DIVERS')),
+                   COALESCE(a.unite, 'Unité'), COALESCE(a.prix_achat, 0.0)
+            FROM articles a
+            LEFT JOIN sous_familles sf ON UPPER(a.sous_famille) = UPPER(sf.code)
+            LEFT JOIN familles f ON sf.code_famille = f.code
+            LEFT JOIN classes cl ON f.code_classe = cl.code
+            WHERE COALESCE(a.actif, 1) = 1
+            ORDER BY a.code
+        """)
+        articles = c.fetchall()
+
+        c.execute("""
+            SELECT code_court, nom_long
+            FROM departements
+            WHERE COALESCE(actif, 1) = 1
+            ORDER BY CASE WHEN code_court = 'ECO' THEN 0 ELSE 1 END, code_court
+        """)
+        depts = c.fetchall()
+    finally:
+        conn.close()
+
+    lignes_stock = []
+    for dp_code, dp_nom in depts:
+        for art in articles:
+            ca, da, sf_c, sf_l, f_c, f_l, cl_c, cl_l, unite, pu = art
+            qte = calculer_stock_article_dept(ca, dp_code)
+            val_ht = round(qte * float(pu), 3)
+            lignes_stock.append({
+                "code_dept": dp_code,
+                "nom_dept": f"{dp_code} - {dp_nom}",
+                "classe": f"{cl_c} - {cl_l}" if cl_c != cl_l else cl_c,
+                "famille": f"{f_c} - {f_l}" if f_c != f_l else f_c,
+                "sous_famille": f"{sf_c} - {sf_l}" if sf_c != sf_l else sf_c,
+                "code_article": ca,
+                "designation": da,
+                "unite": unite,
+                "qte": qte,
+                "pu_ht": float(pu),
+                "valeur_ht": val_ht
+            })
+    return lignes_stock
+def generer_numero_inventaire(annee="2026"):
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        motif = f"INV-{annee}-%"
+        c.execute("SELECT numero FROM inventaires WHERE numero LIKE ? ORDER BY numero DESC LIMIT 1", (motif,))
+        res = c.fetchone()
+        if res:
+            dernier = itemgetter(0)(res)
+            try:
+                seq = int(dernier.split("-").pop()) + 1
+            except Exception:
+                seq = 1
+        else:
+            seq = 1
+        return f"INV-{annee}-{seq:04d}"
+    finally:
+        conn.close()
+
+def sauvegarder_inventaire(numero_inv, date_inv, code_dept, obs, lignes_pointage, creation=True):
+    """
+    lignes_pointage : liste de tuples (code_article, designation, unite, stock_theo, stock_phys, pu_ht)
+    """
+    if not lignes_pointage:
+        return False, "Aucune ligne d'article à enregistrer."
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        if not creation:
+            c.execute("SELECT statut FROM inventaires WHERE numero = ?", (numero_inv,))
+            st_act = c.fetchone()
+            if st_act and itemgetter(0)(st_act) == "CLÔTURÉ":
+                return False, "Cet inventaire est clôturé. Déclôturez-le d'abord pour le modifier."
+            c.execute("UPDATE inventaires SET date_inv = ?, observation = ? WHERE numero = ?",
+                      (str(date_inv), obs.strip(), numero_inv))
+            c.execute("DELETE FROM inventaires_lignes WHERE numero_inv = ?", (numero_inv,))
+        else:
+            c.execute("""INSERT INTO inventaires (numero, date_inv, code_dept, statut, observation)
+                         VALUES (?, ?, ?, 'BROUILLON', ?)""",
+                      (numero_inv, str(date_inv), code_dept, obs.strip()))
+
+        for ca, da, ua, st_th, st_ph, pu in lignes_pointage:
+            ecart = round(float(st_ph) - float(st_th), 3)
+            val_ecart = round(ecart * float(pu), 3)
+            c.execute("""INSERT INTO inventaires_lignes
+                (numero_inv, code_article, designation, unite, stock_theorique, stock_physique, ecart_qte, prix_unitaire_ht, valeur_ecart_ht)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (numero_inv, ca, da, ua, float(st_th), float(st_ph), ecart, float(pu), val_ecart))
+
+        conn.commit()
+        return True, f"Pointage d'inventaire {numero_inv} enregistré (statut : BROUILLON)."
+    finally:
+        conn.close()
+
+def cloturer_inventaire(numero_inv):
+    """
+    Clôture l'inventaire et aligne officiellement le stock théorique du département
+    sur le stock physique compté via des écritures d'ajustement (ED ou SD).
+    """
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("SELECT date_inv, code_dept, statut FROM inventaires WHERE numero = ?", (numero_inv,))
+        res = c.fetchone()
+        if not res:
+            return False, "Inventaire introuvable."
+        date_inv, code_dept, statut = res
+        if statut == "CLÔTURÉ":
+            return False, "Cet inventaire est déjà clôturé."
+
+        c.execute("""SELECT code_article, designation, unite, stock_physique, prix_unitaire_ht
+                     FROM inventaires_lignes WHERE numero_inv = ?""", (numero_inv,))
+        lignes = c.fetchall()
+    finally:
+        conn.close()
+
+    # Calcul de l'écart exact au moment de la clôture et génération des ajustements
+    lignes_ed = []
+    lignes_sd = []
+    for ca, da, ua, st_phys, pu in lignes:
+        stock_actuel = calculer_stock_article_dept(ca, code_dept)
+        diff = round(float(st_phys) - stock_actuel, 3)
+        if diff > 0:
+            lignes_ed.append((ca, da, ua, diff, float(pu), 0.0))
+        elif diff < 0:
+            lignes_sd.append((ca, da, ua, abs(diff), float(pu), 0.0))
+
+    if lignes_ed:
+        enregistrer_document_achat(
+            f"ADJ-E-{numero_inv}", "ED", date_inv, "", code_dept, numero_inv,
+            f"Ajustement positif clôture {numero_inv}", lignes_ed, creation=True
+        )
+    if lignes_sd:
+        enregistrer_document_achat(
+            f"ADJ-S-{numero_inv}", "SD", date_inv, "", code_dept, numero_inv,
+            f"Ajustement négatif clôture {numero_inv}", lignes_sd, creation=True
+        )
+
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("UPDATE inventaires SET statut = 'CLÔTURÉ' WHERE numero = ?", (numero_inv,))
+        conn.commit()
+        return True, f"Inventaire {numero_inv} CLÔTURÉ ! Le stock théorique de {code_dept} est désormais aligné sur le physique."
+    finally:
+        conn.close()
+
+def decloturer_inventaire(numero_inv):
+    """
+    Déclôture un inventaire : supprime les mouvements d'ajustement générés
+    et repasse l'inventaire en statut BROUILLON pour modification.
+    """
+    supprimer_document_achat(f"ADJ-E-{numero_inv}")
+    supprimer_document_achat(f"ADJ-S-{numero_inv}")
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("UPDATE inventaires SET statut = 'BROUILLON' WHERE numero = ?", (numero_inv,))
+        conn.commit()
+        return True, f"Inventaire {numero_inv} DÉCLÔTURÉ : vous pouvez à nouveau le modifier ou le supprimer."
+    finally:
+        conn.close()
+
+def lister_inventaires():
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("""
+            SELECT i.numero, i.date_inv, i.code_dept, i.statut, i.observation,
+                   COALESCE((SELECT SUM(valeur_ecart_ht) FROM inventaires_lignes l WHERE l.numero_inv = i.numero), 0.0)
+            FROM inventaires i
+            ORDER BY i.date_inv DESC, i.numero DESC
+        """)
+        return c.fetchall()
+    finally:
+        conn.close()
+
+def lire_lignes_inventaire(numero_inv):
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("""
+            SELECT code_article, designation, unite, stock_theorique, stock_physique, ecart_qte, prix_unitaire_ht, valeur_ecart_ht
+            FROM inventaires_lignes
+            WHERE numero_inv = ?
+            ORDER BY code_article
+        """, (numero_inv,))
+        return c.fetchall()
+    finally:
+        conn.close()
+
+def supprimer_inventaire(numero_inv):
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("SELECT statut FROM inventaires WHERE numero = ?", (numero_inv,))
+        res = c.fetchone()
+        if res and itemgetter(0)(res) == "CLÔTURÉ":
+            return False, "Impossible de supprimer un inventaire clôturé. Déclôturez-le d'abord."
+        c.execute("DELETE FROM inventaires_lignes WHERE numero_inv = ?", (numero_inv,))
+        c.execute("DELETE FROM inventaires WHERE numero = ?", (numero_inv,))
+        conn.commit()
+        return True, f"Inventaire {numero_inv} supprimé."
+    finally:
+        conn.close()

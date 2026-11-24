@@ -611,7 +611,7 @@ elif menu == "⚙️ Paramétrage de base":
                 st.info("Aucune sous-famille enregistrée.")
 elif menu == "🗂️ Base de données":
     from operator import itemgetter
-    btab1, btab2, btab3 = st.tabs(["📦 Base Articles", "🚚 Base Fournisseurs", "🏢 Base Départements"])
+    btab1, btab2, btab3, btab4 = st.tabs(["📦 Base Articles", "🚚 Base Fournisseurs", "🏢 Base Départements", "📥 Import Base Articles"])
 
     # ---------------- ONGLET 1 : ARTICLES ----------------
     with btab1:
@@ -835,6 +835,27 @@ elif menu == "🗂️ Base de données":
                 st.dataframe(df_dp, use_container_width=True, hide_index=True)
             else:
                 st.info("Aucun département enregistré.")
+                    # ---------------- ONGLET 4 : IMPORT BASE ARTICLES EXCEL ----------------
+    with btab4:
+        st.subheader("📥 Injection automatique de la Base Articles & Nomenclature")
+        st.info("Chargez votre fichier Excel 'Base articles.xlsx' : l'application créera automatiquement les Classes, Familles, Sous-Familles et Articles sans toucher à vos mouvements existants.")
+        fichier_ba = st.file_uploader("Choisir le fichier Excel (Base articles.xlsx) :", type=["xlsx", "xlsm"], key="up_base_art")
+        mode_ecraser = st.checkbox("Mettre à jour les articles existants s'ils ont le même code (sinon ignorer les doublons)", value=False, key="chk_ecraser_art")
+
+        if fichier_ba is not None:
+            if st.button("🚀 Injecter la Base Articles maintenant", type="primary", key="btn_imp_ba"):
+                with st.spinner("Injection de la nomenclature et des articles en cours..."):
+                    suf = os.path.splitext(fichier_ba.name)[1]
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=suf) as tmp_f:
+                        tmp_f.write(fichier_ba.getvalue())
+                        path_ba = tmp_f.name
+                    ok_ba, res_ba = db.importer_base_articles_excel(path_ba, ecraser_existants=mode_ecraser)
+                    os.remove(path_ba)
+                    if ok_ba:
+                        n_cl, n_fam, n_sf, n_art = res_ba
+                        st.success(f"Injection réussie !\n- **{n_cl}** nouvelles Classes\n- **{n_fam}** nouvelles Familles\n- **{n_sf}** nouvelles Sous-Familles\n- **{n_art}** Articles injectés")
+                    else:
+                        st.error(f"Erreur lors de l'injection : {res_ba}")
 elif menu == "🧾 Achats & Mouvements":
     from operator import itemgetter
     from datetime import date

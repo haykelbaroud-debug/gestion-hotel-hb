@@ -1723,7 +1723,7 @@ elif menu == "💰 Centre des Coûts":
 
         # Paramètre provisoire des nuitées (en attendant le module dédié Adultes/Enfants/Bébés/Visiteurs)
         kn1, kn2, kn3 = st.columns([1.5, 1.5, 2])
-                synt_n_cc, _ = db.lister_nuitees_periode(d_deb_cc, d_fin_cc) if volet.startswith("📊") else db.lister_nuitees_periode("1900-01-01", "2099-12-31")
+        synt_n_cc, _ = db.lister_nuitees_periode(d_deb_cc, d_fin_cc) if volet.startswith("📊") else db.lister_nuitees_periode("1900-01-01", "2099-12-31")
         mode_nuit_cc = kn1.radio("Base nuitées :", ["Pondérées F&B", "Brutes"], horizontal=True, key="cc_mode_nuit")
         nb_nuitees_auto = synt_n_cc["total_pondere"] if mode_nuit_cc == "Pondérées F&B" else synt_n_cc["total_brut"]
         nb_nuitees_cc = kn1.number_input("Nuitées retenues :", min_value=0.0, value=float(nb_nuitees_auto), step=10.0, format="%.2f", key="cc_nuit_prov")

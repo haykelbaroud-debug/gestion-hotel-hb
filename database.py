@@ -1569,3 +1569,157 @@ def statistique_tables_base():
         return stats
     finally:
         conn.close()
+# ==============================================================================
+# MODULE NUITÉES : PAYANTS, ENFANTS, BÉBÉS, DAY USE (TARIF VARIABLE) & GRATUITS
+# ==============================================================================
+
+def initialiser_nuitees_m7():
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("""CREATE TABLE IF NOT EXISTS nuitees_detail (
+            date_nuit TEXT PRIMARY KEY,
+            payants INTEGER DEFAULT 0,
+            enfants INTEGER DEFAULT 0,
+            bebes INTEGER DEFAULT 0,
+            day_use INTEGER DEFAULT 0,
+            tarif_day_use REAL DEFAULT 0.0,
+            gratuits INTEGER DEFAULT 0,
+            observation TEXT DEFAULT ''
+        )""")
+
+        c.execute("""CREATE TABLE IF NOT EXISTS nuitees_coefficients (
+            categorie TEXT PRIMARY KEY,
+            coeff REAL NOT NULL
+        )""")
+
+        defaults = [
+            ("payants", 1.00),
+            ("enfants", 0.50),
+            ("bebes", 0.00),
+            ("day_use", 0.50),
+            ("gratuits", 1.00)
+        ]
+        for cat, cf in defaults:
+            c.execute("INSERT OR IGNORE INTO nuitees_coefficients (categorie, coeff) VALUES (?, ?)", (cat, cf))
+
+        conn.commit()
+        c.close()
+    finally:
+        conn.close()
+
+def lire_coefficients_nuitees():
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("SELECT categorie, coeff FROM nuitees_coefficients")
+        res = {itemgetter(0)(r): float(itemgetter(1)(r)) for r in c.fetchall()}
+        return {
+            "payants": res.get("payants", 1.0),
+            "enfants": res.get("enfants", 0.5),
+            "bebes": res.get("bebes", 0.0),
+            "day_use": res.get("day_use", 0.5),
+            "gratuits": res.get("gratuits", 1.0)
+        }
+    finally:
+        conn.close()
+
+def sauvegarder_coefficients_nuitees(coeffs_dict):
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        for cat, val in coeffs_dict.items():
+            c.execute("INSERT OR REPLACE INTO nuitees_coefficients (categorie, coeff) VALUES (?, ?)", (cat, float(val)))
+        conn.commit()
+        return True, "Coefficients F&B mis à jour avec succès."
+    finally:
+        conn.close()
+
+def sauvegarder_nuitee_jour(date_nuit, payants, enfants, bebes, day_use, tarif_du, gratuits, obs=""):
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("""INSERT OR REPLACE INTO nuitees_detail
+            (date_nuit, payants, enfants, bebes, day_use, tarif_day_use, gratuits, observation)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (str(date_nuit), int(payants), int(enfants), int(bebes), int(day_use), float(tarif_du), int(gratuits), obs.strip()))
+        conn.commit()
+        return True, f"Nuitées du {date_nuit} enregistrées avec succès."
+    finally:
+        conn.close()
+
+def supprimer_nuitee_jour(date_nuit):
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("DELETE FROM nuitees_detail WHERE date_nuit = ?", (str(date_nuit),))
+        conn.commit()
+        return True, f"Saisie du {date_nuit} supprimée."
+    finally:
+        conn.close()
+
+def lister_nuitees_periode(date_deb, date_fin):
+    coeffs = lire_coefficients_nuitees()
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("""
+            SELECT date_nuit, payants, enfants, bebes, day_use, tarif_day_use, gratuits, COALESCE(observation, '')
+            FROM nuitees_detail
+            WHERE date_nuit BETWEEN ? AND ?
+            ORDER BY date_nuit DESC
+        """, (str(date_deb), str(date_fin)))
+        rows = c.fetchall()
+    finally:
+        conn.close()
+
+    lignes = []
+    tot_pay, tot_enf, tot_beb, tot_du, tot_rec_du, tot_grat = 0, 0, 0, 0, 0.0, 0
+    tot_brut, tot_pondere = 0.0, 0.0
+
+    for d_n, pay, enf, beb, du, t_du, grat, obs in rows:
+        brut = pay + enf + beb + du + grat
+        pond = round(
+            pay * coeffs["payants"] +
+            enf * coeffs["enfants"] +
+            beb * coeffs["bebes"] +
+            du * coeffs["day_use"] +
+            grat * coeffs["gratuits"],
+            2
+        )
+        rec_du = round(du * float(t_du), 3)
+
+        tot_pay += pay
+        tot_enf += enf
+        tot_beb += beb
+        tot_du += du
+        tot_rec_du += rec_du
+        tot_grat += grat
+        tot_brut += brut
+        tot_pondere += pond
+
+        lignes.append({
+            "date": d_n,
+            "payants": pay,
+            "enfants": enf,
+            "bebes": beb,
+            "day_use": du,
+            "tarif_du": float(t_du),
+            "recette_du": rec_du,
+            "gratuits": grat,
+            "total_brut": brut,
+            "total_pondere": pond,
+            "observation": obs
+        })
+
+    synthese = {
+        "payants": tot_pay,
+        "enfants": tot_enf,
+        "bebes": tot_beb,
+        "day_use": tot_du,
+        "recette_day_use": round(tot_rec_du, 3),
+        "gratuits": tot_grat,
+        "total_brut": round(tot_brut, 2),
+        "total_pondere": round(tot_pondere, 2)
+    }
+    return synthese, lignes

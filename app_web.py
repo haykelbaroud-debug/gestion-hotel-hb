@@ -84,7 +84,7 @@ if not st.session_state.authentifie:
 st.sidebar.title("Navigation")
 menu = st.sidebar.radio(
     "Choisir un module :",
-    ["📊 Rapport Exécutif", "🛒 Achats & Stratégie", "🍽️ Consommations", "⚙️ Paramétrage de base", "🗂️ Base de données", "🧾 Achats & Mouvements", "🔄 Transferts", "📦 Stock", "📋 Inventaire", "📈 Gestion", "💰 Centre des Coûts", "📥 Import Excel"]
+    ["📊 Rapport Exécutif", "🛒 Achats & Stratégie", "🍽️ Consommations", "⚙️ Paramétrage de base", "🗂️ Base de données", "🧾 Achats & Mouvements", "🔄 Transferts", "📦 Stock", "📋 Inventaire", "📈 Gestion", "💰 Centre des Coûts", "📥 Import Excel", "💾 Sauvegarde"]
 )
 
 if st.sidebar.button("🔒 Verrouiller"):
@@ -1777,3 +1777,45 @@ elif menu == "💰 Centre des Coûts":
                                 file_name=f"Centre_Couts_{titre_periode}.pdf", mime="application/pdf")
             bc2.download_button("📊 Exporter Synthèse Excel", data=generer_excel_memoire(f"Centre_Couts_{titre_periode}", entetes_cc, lignes_cc),
                                 file_name=f"Centre_Couts_{titre_periode}.xlsx")
+elif menu == "💾 Sauvegarde":
+    from operator import itemgetter
+    from datetime import datetime
+
+    st.subheader("Sauvegarde & Restauration de la Base de Données")
+    st.info("💡 Pensez à télécharger une sauvegarde avant chaque mise à jour de l'application sur GitHub ou en fin de journée.")
+
+    col_sauv, col_rest = st.columns(2)
+
+    with col_sauv:
+        st.markdown("### 📤 1. Télécharger une sauvegarde")
+        horodatage = datetime.now().strftime("%Y-%m-%d_%Hh%M")
+        donnees_db = db.lire_fichier_base_octets()
+        taille_ko = len(donnees_db) / 1024.0
+
+        st.metric("Taille actuelle de la base", f"{taille_ko:,.1f} Ko")
+        st.download_button(
+            label="💾 Télécharger la Sauvegarde Complète (.db)",
+            data=donnees_db,
+            file_name=f"hotel_erp_sauvegarde_{horodatage}.db",
+            mime="application/octet-stream",
+            type="primary"
+        )
+
+    with col_rest:
+        st.markdown("### 📥 2. Restaurer une sauvegarde")
+        st.warning("⚠️ La restauration remplace les données actuelles par celles du fichier de sauvegarde choisi.")
+        fichier_db = st.file_uploader("Choisir un fichier de sauvegarde (.db) :", type=["db", "sqlite", "sqlite3"], key="up_restore_db")
+        if fichier_db is not None:
+            if st.button("🔄 Lancer la restauration maintenant", type="primary", key="btn_restore_db"):
+                ok, msg = db.restaurer_base_depuis_octets(fichier_db.getvalue())
+                if ok:
+                    st.success(msg)
+                    st.rerun()
+                else:
+                    st.error(msg)
+
+    st.divider()
+    st.markdown("### 📊 Contenu actuel enregistré dans votre base")
+    stats = db.statistique_tables_base()
+    df_stats = pd.DataFrame([{"Module / Table": itemgetter(0)(s), "Nombre d'enregistrements": itemgetter(1)(s)} for s in stats])
+    st.dataframe(df_stats, use_container_width=True, hide_index=True)

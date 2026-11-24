@@ -19,6 +19,7 @@ db.initialiser_referentiels_m2()
 db.initialiser_achats_m3()
 db.initialiser_transferts_m4()
 db.initialiser_stock_inventaire_m5()
+db.initialiser_nuitees_m7()
 
 def generer_excel_memoire(titre, entetes, lignes):
     import openpyxl
@@ -84,7 +85,7 @@ if not st.session_state.authentifie:
 st.sidebar.title("Navigation")
 menu = st.sidebar.radio(
     "Choisir un module :",
-    ["📊 Rapport Exécutif", "🛒 Achats & Stratégie", "🍽️ Consommations", "⚙️ Paramétrage de base", "🗂️ Base de données", "🧾 Achats & Mouvements", "🔄 Transferts", "📦 Stock", "📋 Inventaire", "📈 Gestion", "💰 Centre des Coûts", "📥 Import Excel", "💾 Sauvegarde"]
+    ["📊 Rapport Exécutif", "🛒 Achats & Stratégie", "🍽️ Consommations", "⚙️ Paramétrage de base", "🗂️ Base de données", "🧾 Achats & Mouvements", "🔄 Transferts", "📦 Stock", "📋 Inventaire", "🛏️ Nuitées", "📈 Gestion", "💰 Centre des Coûts", "📥 Import Excel", "💾 Sauvegarde"]
 )
 
 if st.sidebar.button("🔒 Verrouiller"):
@@ -1722,8 +1723,10 @@ elif menu == "💰 Centre des Coûts":
 
         # Paramètre provisoire des nuitées (en attendant le module dédié Adultes/Enfants/Bébés/Visiteurs)
         kn1, kn2, kn3 = st.columns([1.5, 1.5, 2])
-        nb_nuitees_cc = kn1.number_input("Nuitées de la période (Provisoire) :", min_value=0.0, value=100.0, step=10.0, format="%.0f", key="cc_nuit_prov")
-        cout_nuitee_global = (cout_total_periode / nb_nuitees_cc) if nb_nuitees_cc > 0 else 0.0
+                synt_n_cc, _ = db.lister_nuitees_periode(d_deb_cc, d_fin_cc) if volet.startswith("📊") else db.lister_nuitees_periode("1900-01-01", "2099-12-31")
+        mode_nuit_cc = kn1.radio("Base nuitées :", ["Pondérées F&B", "Brutes"], horizontal=True, key="cc_mode_nuit")
+        nb_nuitees_auto = synt_n_cc["total_pondere"] if mode_nuit_cc == "Pondérées F&B" else synt_n_cc["total_brut"]
+        nb_nuitees_cc = kn1.number_input("Nuitées retenues :", min_value=0.0, value=float(nb_nuitees_auto), step=10.0, format="%.2f", key="cc_nuit_prov")
         kn2.metric("Coût Total Consommé (HT)", f"{cout_total_periode:,.3f} DT")
         kn3.metric("Coût Moyen / Nuitée", f"{cout_nuitee_global:,.3f} DT")
 
@@ -1819,3 +1822,119 @@ elif menu == "💾 Sauvegarde":
     stats = db.statistique_tables_base()
     df_stats = pd.DataFrame([{"Module / Table": itemgetter(0)(s), "Nombre d'enregistrements": itemgetter(1)(s)} for s in stats])
     st.dataframe(df_stats, use_container_width=True, hide_index=True)
+elif menu == "🛏️ Nuitées":
+    from datetime import date
+
+    ntab1, ntab2, ntab3 = st.tabs([
+        "📝 Saisie & Consultation",
+        "📊 Récapitulatif & Analyse",
+        "⚙️ Coefficients F&B"
+    ])
+
+    coeffs_act = db.lire_coefficients_nuitees()
+
+    # ---------------- ONGLET 1 : SAISIE JOURNALIÈRE ----------------
+    with ntab1:
+        st.subheader("Enregistrer ou modifier les nuitées d'une journée")
+        c_d, c_obs = st.columns([1.5, 3])
+        date_saisie_n = c_d.date_input("Date concernée :", value=date.today(), key="nuit_date_saisie")
+        obs_n = c_obs.text_input("Observation (ex: Groupe, Séminaire, Tarif haute saison...) :", key="nuit_obs_saisie")
+
+        # Pré-remplissage automatique si la date existe déjà
+        _, existant = db.lister_nuitees_periode(date_saisie_n, date_saisie_n)
+        def_pay = existant[0]["payants"] if existant else 0
+        def_enf = existant[0]["enfants"] if existant else 0
+        def_beb = existant[0]["bebes"] if existant else 0
+        def_du = existant[0]["day_use"] if existant else 0
+        def_tdu = existant[0]["tarif_du"] if existant else 0.0
+        def_grat = existant[0]["gratuits"] if existant else 0
+
+        if existant:
+            st.info(f"ℹ️ Des données existent déjà pour le **{date_saisie_n}** : toute sauvegarde mettra à jour cette journée.")
+
+        col1, col2, col3 = st.columns(3)
+        n_pay = col1.number_input("Adultes Payants :", min_value=0, value=int(def_pay), step=1, key="n_pay")
+        n_enf = col2.number_input("Enfants :", min_value=0, value=int(def_enf), step=1, key="n_enf")
+        n_beb = col3.number_input("Bébés :", min_value=0, value=int(def_beb), step=1, key="n_beb")
+
+        col4, col5, col6 = st.columns(3)
+        n_du = col4.number_input("Day Use (Nombre) :", min_value=0, value=int(def_du), step=1, key="n_du")
+        n_tdu = col5.number_input("Tarif Fixe Day Use (DT) :", min_value=0.0, value=float(def_tdu), step=5.0, format="%.3f", key="n_tdu")
+        n_grat = col6.number_input("Visiteurs / Complimentary (Gratuits) :", min_value=0, value=int(def_grat), step=1, key="n_grat")
+
+        tot_brut_prev = n_pay + n_enf + n_beb + n_du + n_grat
+        tot_pond_prev = round(
+            n_pay * coeffs_act["payants"] +
+            n_enf * coeffs_act["enfants"] +
+            n_beb * coeffs_act["bebes"] +
+            n_du * coeffs_act["day_use"] +
+            n_grat * coeffs_act["gratuits"], 2
+        )
+        rec_du_prev = round(n_du * n_tdu, 3)
+
+        kp1, kp2, kp3 = st.columns(3)
+        kp1.metric("Total Physique (Brut)", f"{tot_brut_prev} pers.")
+        kp2.metric("Total Pondéré F&B (Éq. Adulte)", f"{tot_pond_prev:,.2f}")
+        kp3.metric("Recette Day Use du jour", f"{rec_du_prev:,.3f} DT")
+
+        bs1, bs2 = st.columns(2)
+        if bs1.button("💾 Enregistrer la journée", type="primary", key="btn_save_nuit"):
+            ok, msg = db.sauvegarder_nuitee_jour(date_saisie_n, n_pay, n_enf, n_beb, n_du, n_tdu, n_grat, obs_n)
+            st.success(msg)
+            st.rerun()
+        if existant and bs2.button("🗑️ Supprimer cette journée", key="btn_del_nuit"):
+            ok, msg = db.supprimer_nuitee_jour(date_saisie_n)
+            st.warning(msg)
+            st.rerun()
+
+    # ---------------- ONGLET 2 : RÉCAPITULATIF ----------------
+    with ntab2:
+        st.subheader("Suivi & Récapitulatif des Nuitées")
+        r1, r2 = st.columns(2)
+        d_deb_n = r1.date_input("Du :", value=date(date.today().year, date.today().month, 1), key="rec_n_d1")
+        d_fin_n = r2.date_input("Au :", value=date.today(), key="rec_n_d2")
+
+        synthese_n, lignes_n = db.lister_nuitees_periode(d_deb_n, d_fin_n)
+        if not lignes_n:
+            st.info("Aucune nuitée enregistrée sur cette période.")
+        else:
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Payants", f"{synthese_n['payants']:,}")
+            m2.metric("Enfants / Bébés", f"{synthese_n['enfants']:,} / {synthese_n['bebes']:,}")
+            m3.metric("Day Use (Recette)", f"{synthese_n['day_use']:,} ({synthese_n['recette_day_use']:,.3f} DT)")
+            m4.metric("Visiteurs / Complimentary", f"{synthese_n['gratuits']:,}")
+
+            m5, m6 = st.columns(2)
+            m5.metric("Total Nuitées Brutes", f"{synthese_n['total_brut']:,.0f}")
+            m6.metric("Total Nuitées Pondérées F&B", f"{synthese_n['total_pondere']:,.2f}")
+
+            df_n = pd.DataFrame(lignes_n)
+            df_n_aff = df_n[["date", "payants", "enfants", "bebes", "day_use", "tarif_du", "recette_du", "gratuits", "total_brut", "total_pondere", "observation"]].copy()
+            df_n_aff.columns = ["Date", "Payants", "Enfants", "Bébés", "Day Use", "Tarif DU (DT)", "Recette DU (DT)", "Gratuits/Compl.", "Total Brut", "Total Pondéré F&B", "Observation"]
+            st.dataframe(df_n_aff, use_container_width=True, hide_index=True, height=400)
+
+            entetes_n = list(df_n_aff.columns)
+            lignes_exp_n = [[f"{v:,.3f}" if isinstance(v, float) else str(v) for v in row] for row in df_n_aff.values.tolist()]
+            bn1, bn2 = st.columns(2)
+            bn1.download_button("📄 Exporter PDF", data=generer_pdf_memoire(f"Nuitees_{d_deb_n}_au_{d_fin_n}", entetes_n, lignes_exp_n, paysage=True),
+                                file_name=f"Nuitees_{d_deb_n}_au_{d_fin_n}.pdf", mime="application/pdf")
+            bn2.download_button("📊 Exporter Excel", data=generer_excel_memoire(f"Nuitees_{d_deb_n}_au_{d_fin_n}", entetes_n, lignes_exp_n),
+                                file_name=f"Nuitees_{d_deb_n}_au_{d_fin_n}.xlsx")
+
+    # ---------------- ONGLET 3 : COEFFICIENTS F&B ----------------
+    with ntab3:
+        st.subheader("Paramétrage des Coefficients F&B (Équivalent Adulte)")
+        st.info("Définissez le poids de consommation F&B de chaque catégorie pour le calcul du Coût / Nuitée.")
+        cf1, cf2, cf3, cf4, cf5 = st.columns(5)
+        c_pay = cf1.number_input("Coeff. Payants :", min_value=0.0, max_value=2.0, value=float(coeffs_act["payants"]), step=0.05, key="cf_pay")
+        c_enf = cf2.number_input("Coeff. Enfants :", min_value=0.0, max_value=2.0, value=float(coeffs_act["enfants"]), step=0.05, key="cf_enf")
+        c_beb = cf3.number_input("Coeff. Bébés :", min_value=0.0, max_value=2.0, value=float(coeffs_act["bebes"]), step=0.05, key="cf_beb")
+        c_du = cf4.number_input("Coeff. Day Use :", min_value=0.0, max_value=2.0, value=float(coeffs_act["day_use"]), step=0.05, key="cf_du")
+        c_gr = cf5.number_input("Coeff. Gratuits/Compl. :", min_value=0.0, max_value=2.0, value=float(coeffs_act["gratuits"]), step=0.05, key="cf_gr")
+
+        if st.button("💾 Enregistrer les Coefficients", type="primary", key="btn_save_coeffs"):
+            ok, msg = db.sauvegarder_coefficients_nuitees({
+                "payants": c_pay, "enfants": c_enf, "bebes": c_beb, "day_use": c_du, "gratuits": c_gr
+            })
+            st.success(msg)
+            st.rerun()

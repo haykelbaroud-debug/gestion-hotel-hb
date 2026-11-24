@@ -16,6 +16,7 @@ st.set_page_config(
 db.initialiser_base()
 db.initialiser_parametrage()
 db.initialiser_referentiels_m2()
+db.initialiser_achats_m3()
 
 def generer_excel_memoire(titre, entetes, lignes):
     import openpyxl
@@ -81,7 +82,7 @@ if not st.session_state.authentifie:
 st.sidebar.title("Navigation")
 menu = st.sidebar.radio(
     "Choisir un module :",
-    ["📊 Rapport Exécutif", "🛒 Achats & Stratégie", "🍽️ Consommations", "⚙️ Paramétrage de base", "🗂️ Base de données", "📥 Import Excel"]
+    ["📊 Rapport Exécutif", "🛒 Achats & Stratégie", "🍽️ Consommations", "⚙️ Paramétrage de base", "🗂️ Base de données", "🧾 Achats & Mouvements", "📥 Import Excel"]
 )
 
 if st.sidebar.button("🔒 Verrouiller"):
@@ -831,3 +832,228 @@ elif menu == "🗂️ Base de données":
                 st.dataframe(df_dp, use_container_width=True, hide_index=True)
             else:
                 st.info("Aucun département enregistré.")
+elif menu == "🧾 Achats & Mouvements":
+    from operator import itemgetter
+    from datetime import date
+
+    atab1, atab2, atab3, atab4, atab5, atab6 = st.tabs([
+        "📝 Bon de Commande",
+        "📦 Bon de Réception",
+        "↩️ Retour Fournisseur",
+        "➕ Entrée Directe",
+        "➖ Sortie Directe",
+        "🔐 Autorisations Dépôts"
+    ])
+
+    def afficher_ecran_document(type_doc, prefixe, titre_doc, besoin_fournisseur=True):
+        articles_actifs = db.lister_articles_complet(seulement_actifs=True)
+        fournisseurs_actifs = db.lister_fournisseurs(seulement_actifs=True)
+        depts_autorises = db.lister_depts_achats()
+
+        mode_doc = st.radio(
+            "Opération :",
+            ["➕ Nouveau Bon", "📋 Consulter / Modifier / Supprimer"],
+            key=f"mode_{type_doc}",
+            horizontal=True
+        )
+
+        cle_panier = f"panier_{type_doc}"
+        if cle_panier not in st.session_state:
+            st.session_state[cle_panier] = []
+
+        if mode_doc == "➕ Nouveau Bon":
+            if not articles_actifs:
+                st.warning("Créez d'abord au moins un article dans 'Base de données > Base Articles'.")
+                return
+            if besoin_fournisseur and not fournisseurs_actifs:
+                st.warning("Créez d'abord au moins un fournisseur dans 'Base de données > Base Fournisseurs'.")
+                return
+
+            num_auto = db.generer_numero_doc(prefixe, str(date.today().year))
+            c1, c2, c3, c4 = st.columns(4)
+            c1.text_input("N° Document (Auto) :", value=num_auto, disabled=True, key=f"num_{type_doc}")
+            date_saisie = c2.date_input("Date :", value=date.today(), key=f"date_{type_doc}")
+
+            map_depts = {itemgetter(0)(d): f"{itemgetter(0)(d)} - {itemgetter(1)(d)}" for d in depts_autorises}
+            dept_sel = c3.selectbox("Dépôt / Département :", list(map_depts.keys()),
+                                    format_func=lambda x: map_depts[x], key=f"dept_{type_doc}")
+
+            if besoin_fournisseur:
+                map_fourn = {itemgetter(0)(f): f"{itemgetter(0)(f)} - {itemgetter(1)(f)}" for f in fournisseurs_actifs}
+                fourn_sel = c4.selectbox("Fournisseur :", list(map_fourn.keys()),
+                                         format_func=lambda x: map_fourn[x], key=f"fourn_{type_doc}")
+            else:
+                fourn_sel = ""
+                c4.text_input("Type Mouvement :", value=titre_doc, disabled=True, key=f"info_{type_doc}")
+
+            c_ref, c_obs = st.columns(2)
+            ref_ext = c_ref.text_input("N° BL / Facture / Référence :", key=f"ref_{type_doc}")
+            obs_doc = c_obs.text_input("Observation / Motif :", key=f"obs_{type_doc}")
+
+            st.markdown("#### Ajout d'articles au bon")
+            map_art = {
+                itemgetter(0)(a): f"{itemgetter(0)(a)} - {itemgetter(1)(a)} ({itemgetter(6)(a)})"
+                for a in articles_actifs
+            }
+            dict_art_info = {itemgetter(0)(a): a for a in articles_actifs}
+
+            ca1, ca2, ca3, ca4 = st.columns([3, 1, 1, 1])
+            art_choisi = ca1.selectbox("Article :", list(map_art.keys()), format_func=lambda x: map_art[x], key=f"art_sel_{type_doc}")
+            info_a = dict_art_info[art_choisi]
+            qte_saisie = ca2.number_input("Quantité :", min_value=0.001, value=1.0, step=1.0, format="%.3f", key=f"qte_{type_doc}")
+            pu_saisi = ca3.number_input("Prix Unit. HT :", min_value=0.0, value=float(itemgetter(7)(info_a)), step=0.100, format="%.3f", key=f"pu_{type_doc}")
+
+            if ca4.button("➕ Ajouter ligne", key=f"add_line_{type_doc}"):
+                st.session_state[cle_panier].append((
+                    art_choisi,
+                    itemgetter(1)(info_a),
+                    itemgetter(6)(info_a),
+                    qte_saisie,
+                    pu_saisi,
+                    float(itemgetter(8)(info_a))
+                ))
+                st.rerun()
+
+            if st.session_state[cle_panier]:
+                lignes_aff = []
+                tot_ht, tot_ttc = 0.0, 0.0
+                for idx, (ca, da, ua, qa, pa, ta) in enumerate(st.session_state[cle_panier]):
+                    mht = round(qa * pa, 3)
+                    mttc = round(mht * (1.0 + ta / 100.0), 3)
+                    tot_ht += mht
+                    tot_ttc += mttc
+                    lignes_aff.append({
+                        "Ligne": idx + 1,
+                        "Code": ca,
+                        "Désignation": da,
+                        "Unité": ua,
+                        "Qté": f"{qa:,.3f}",
+                        "PU HT": f"{pa:,.3f}",
+                        "TVA": f"{ta:.0f}%",
+                        "Total HT": f"{mht:,.3f}",
+                        "Total TTC": f"{mttc:,.3f}"
+                    })
+                st.dataframe(pd.DataFrame(lignes_aff), use_container_width=True, hide_index=True)
+
+                k1, k2, k3 = st.columns(3)
+                k1.metric("Total HT", f"{tot_ht:,.3f} DT")
+                k2.metric("Total TTC", f"{tot_ttc:,.3f} DT")
+                if k3.button("🧹 Vider les lignes", key=f"clear_{type_doc}"):
+                    st.session_state[cle_panier] = []
+                    st.rerun()
+
+                if st.button(f"💾 Enregistrer {titre_doc} ({num_auto})", type="primary", key=f"save_{type_doc}"):
+                    ok, msg = db.enregistrer_document_achat(
+                        num_auto, type_doc, date_saisie, fourn_sel, dept_sel, ref_ext, obs_doc, st.session_state[cle_panier], creation=True
+                    )
+                    if ok:
+                        st.session_state[cle_panier] = []
+                        st.success(msg)
+                        st.rerun()
+                    else:
+                        st.error(msg)
+        else:
+            docs = db.lister_documents_achat(type_doc)
+            if not docs:
+                st.info(f"Aucun document ({titre_doc}) enregistré pour le moment.")
+                return
+
+            df_docs = pd.DataFrame([
+                {
+                    "Numéro": itemgetter(0)(d),
+                    "Date": itemgetter(1)(d),
+                    "Fournisseur": itemgetter(2)(d) if besoin_fournisseur else "-",
+                    "Dépôt": itemgetter(3)(d),
+                    "Réf Externe": itemgetter(4)(d),
+                    "Total HT": f"{itemgetter(5)(d):,.3f}",
+                    "Total TTC": f"{itemgetter(6)(d):,.3f}",
+                    "Observation": itemgetter(7)(d)
+                }
+                for d in docs
+            ])
+            st.dataframe(df_docs, use_container_width=True, hide_index=True)
+
+            st.divider()
+            dict_docs = {itemgetter(0)(d): d for d in docs}
+            sel_num = st.selectbox("Sélectionner un document pour détail / modification / suppression :", list(dict_docs.keys()), key=f"sel_doc_{type_doc}")
+            doc_info = dict_docs[sel_num]
+            lignes_doc = db.lire_lignes_document(sel_num)
+
+            st.markdown(f"**Détail du bon `{sel_num}` :**")
+            st.dataframe(pd.DataFrame([
+                {
+                    "Code": itemgetter(0)(l),
+                    "Désignation": itemgetter(1)(l),
+                    "Unité": itemgetter(2)(l),
+                    "Qté": f"{itemgetter(3)(l):,.3f}",
+                    "PU HT": f"{itemgetter(4)(l):,.3f}",
+                    "TVA": f"{itemgetter(5)(l):.0f}%",
+                    "Montant HT": f"{itemgetter(6)(l):,.3f}",
+                    "Montant TTC": f"{itemgetter(7)(l):,.3f}"
+                }
+                for l in lignes_doc
+            ]), use_container_width=True, hide_index=True)
+
+            with st.expander("✏️ Modifier l'entête ou les quantités de ce bon"):
+                new_ref = st.text_input("Référence externe :", value=itemgetter(4)(doc_info), key=f"m_ref_{type_doc}")
+                new_obs = st.text_input("Observation :", value=itemgetter(7)(doc_info), key=f"m_obs_{type_doc}")
+                nouvelles_lignes = []
+                for idx_l, l in enumerate(lignes_doc):
+                    mc1, mc2, mc3 = st.columns([3, 1, 1])
+                    mc1.text(f"{itemgetter(0)(l)} - {itemgetter(1)(l)}")
+                    nq = mc2.number_input("Qté", value=float(itemgetter(3)(l)), min_value=0.0, step=1.0, format="%.3f", key=f"mq_{type_doc}_{idx_l}")
+                    np = mc3.number_input("PU HT", value=float(itemgetter(4)(l)), min_value=0.0, step=0.100, format="%.3f", key=f"mp_{type_doc}_{idx_l}")
+                    if nq > 0:
+                        nouvelles_lignes.append((itemgetter(0)(l), itemgetter(1)(l), itemgetter(2)(l), nq, np, float(itemgetter(5)(l))))
+
+                if st.button("💾 Enregistrer les modifications", type="primary", key=f"btn_mod_{type_doc}"):
+                    ok, msg = db.enregistrer_document_achat(
+                        sel_num, type_doc, itemgetter(1)(doc_info), itemgetter(8)(doc_info),
+                        itemgetter(3)(doc_info), new_ref, new_obs, nouvelles_lignes, creation=False
+                    )
+                    if ok:
+                        st.success(msg)
+                        st.rerun()
+                    else:
+                        st.error(msg)
+
+            if st.button(f"🗑️ Supprimer définitivement le bon {sel_num}", key=f"del_doc_{type_doc}"):
+                ok, msg = db.supprimer_document_achat(sel_num)
+                st.success(msg)
+                st.rerun()
+
+    with atab1:
+        afficher_ecran_document("BC", "BC", "Bon de Commande", besoin_fournisseur=True)
+    with atab2:
+        afficher_ecran_document("BR", "BR", "Bon de Réception", besoin_fournisseur=True)
+    with atab3:
+        afficher_ecran_document("RF", "RF", "Retour Fournisseur", besoin_fournisseur=True)
+    with atab4:
+        afficher_ecran_document("ED", "ED", "Entrée Directe", besoin_fournisseur=False)
+    with atab5:
+        afficher_ecran_document("SD", "SD", "Sortie Directe", besoin_fournisseur=False)
+    with atab6:
+        st.subheader("🔐 Départements autorisés à recevoir des Achats")
+        st.info("Par défaut, seul l'Économat Central (ECO) reçoit les achats. Vous pouvez activer ou désactiver l'autorisation pour d'autres départements ci-dessous.")
+        conn_tmp = db.get_connection()
+        c_tmp = conn_tmp.cursor()
+        c_tmp.execute("SELECT code_court, nom_long, COALESCE(autorise_achat, 0) FROM departements WHERE COALESCE(actif, 1) = 1 ORDER BY code_court")
+        liste_dp_auth = c_tmp.fetchall()
+        conn_tmp.close()
+
+        for dp_code, dp_nom, dp_auth in liste_dp_auth:
+            ca, cb, cc = st.columns([2, 3, 2])
+            ca.write(f"**{dp_code}**")
+            cb.write(dp_nom)
+            est_auto = bool(dp_auth)
+            if dp_code == "ECO":
+                cc.success("✅ Dépôt principal (Actif)")
+            else:
+                if est_auto:
+                    if cc.button("⛔ Désactiver", key=f"dis_auth_{dp_code}"):
+                        db.basculer_autorisation_achat_dept(dp_code, 0)
+                        st.rerun()
+                else:
+                    if cc.button("✅ Activer achats", key=f"ena_auth_{dp_code}"):
+                        db.basculer_autorisation_achat_dept(dp_code, 1)
+                        st.rerun()

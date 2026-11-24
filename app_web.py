@@ -18,6 +18,7 @@ db.initialiser_parametrage()
 db.initialiser_referentiels_m2()
 db.initialiser_achats_m3()
 db.initialiser_transferts_m4()
+db.initialiser_stock_inventaire_m5()
 
 def generer_excel_memoire(titre, entetes, lignes):
     import openpyxl
@@ -83,7 +84,7 @@ if not st.session_state.authentifie:
 st.sidebar.title("Navigation")
 menu = st.sidebar.radio(
     "Choisir un module :",
-    ["📊 Rapport Exécutif", "🛒 Achats & Stratégie", "🍽️ Consommations", "⚙️ Paramétrage de base", "🗂️ Base de données", "🧾 Achats & Mouvements", "🔄 Transferts", "📥 Import Excel"]
+    ["📊 Rapport Exécutif", "🛒 Achats & Stratégie", "🍽️ Consommations", "⚙️ Paramétrage de base", "🗂️ Base de données", "🧾 Achats & Mouvements", "🔄 Transferts", "📦 Stock", "📋 Inventaire", "📥 Import Excel"]
 )
 
 if st.sidebar.button("🔒 Verrouiller"):
@@ -1375,3 +1376,233 @@ elif menu == "🔄 Transferts":
                     st.rerun()
             else:
                 st.info("Aucun bon de transfert enregistré.")
+elif menu == "📦 Stock":
+    st.subheader("Visualisation & Valorisation du Stock en Temps Réel")
+    donnees_stock = db.lister_etat_stock_global()
+
+    if not donnees_stock:
+        st.info("Aucun article ou département actif trouvé pour afficher le stock.")
+    else:
+        df_s = pd.DataFrame(donnees_stock)
+
+        # Filtres rapides
+        fc1, fc2, fc3, fc4 = st.columns(4)
+        liste_dp = ["Tous"] + sorted(df_s["nom_dept"].unique().tolist())
+        liste_cl = ["Toutes"] + sorted(df_s["classe"].unique().tolist())
+        liste_fam = ["Toutes"] + sorted(df_s["famille"].unique().tolist())
+        liste_sf = ["Toutes"] + sorted(df_s["sous_famille"].unique().tolist())
+
+        sel_dp = fc1.selectbox("Département :", liste_dp, key="stk_f_dp")
+        sel_cl = fc2.selectbox("Classe :", liste_cl, key="stk_f_cl")
+        sel_fam = fc3.selectbox("Famille :", liste_fam, key="stk_f_fam")
+        sel_sf = fc4.selectbox("Sous-famille :", liste_sf, key="stk_f_sf")
+
+        masquer_zero = st.checkbox("Masquer les lignes avec stock à 0", value=False, key="stk_no_zero")
+
+        df_filtre = df_s.copy()
+        if sel_dp != "Tous":
+            df_filtre = df_filtre[df_filtre["nom_dept"] == sel_dp]
+        if sel_cl != "Toutes":
+            df_filtre = df_filtre[df_filtre["classe"] == sel_cl]
+        if sel_fam != "Toutes":
+            df_filtre = df_filtre[df_filtre["famille"] == sel_fam]
+        if sel_sf != "Toutes":
+            df_filtre = df_filtre[df_filtre["sous_famille"] == sel_sf]
+        if masquer_zero:
+            df_filtre = df_filtre[df_filtre["qte"] != 0]
+
+        # Vue d'analyse selon le niveau souhaité
+        vue_niveau = st.radio(
+            "Regrouper la visualisation :",
+            ["📦 Par Article (Détail)", "🏢 Par Département", "📁 Par Classe", "📂 Par Famille", "🏷️ Par Sous-Famille"],
+            horizontal=True,
+            key="stk_vue_niv"
+        )
+
+        val_totale = df_filtre["valeur_ht"].sum()
+        qte_totale = df_filtre["qte"].sum()
+        k1, k2 = st.columns(2)
+        k1.metric("Quantité Totale Cumulée", f"{qte_totale:,.3f}")
+        k2.metric("Valeur Totale du Stock (HT)", f"{val_totale:,.3f} DT")
+
+        if vue_niveau == "📦 Par Article (Détail)":
+            df_aff = df_filtre[["nom_dept", "classe", "famille", "sous_famille", "code_article", "designation", "unite", "qte", "pu_ht", "valeur_ht"]].copy()
+            df_aff.columns = ["Département", "Classe", "Famille", "Sous-Famille", "Code", "Désignation", "Unité", "Stock", "PU HT", "Valeur HT (DT)"]
+        elif vue_niveau == "🏢 Par Département":
+            df_aff = df_filtre.groupby(["nom_dept"], as_index=False).agg({"qte": "sum", "valeur_ht": "sum"})
+            df_aff.columns = ["Département", "Quantité Totale", "Valeur Stock HT (DT)"]
+        elif vue_niveau == "📁 Par Classe":
+            df_aff = df_filtre.groupby(["classe"], as_index=False).agg({"qte": "sum", "valeur_ht": "sum"})
+            df_aff.columns = ["Classe", "Quantité Totale", "Valeur Stock HT (DT)"]
+        elif vue_niveau == "📂 Par Famille":
+            df_aff = df_filtre.groupby(["classe", "famille"], as_index=False).agg({"qte": "sum", "valeur_ht": "sum"})
+            df_aff.columns = ["Classe", "Famille", "Quantité Totale", "Valeur Stock HT (DT)"]
+        else:
+            df_aff = df_filtre.groupby(["classe", "famille", "sous_famille"], as_index=False).agg({"qte": "sum", "valeur_ht": "sum"})
+            df_aff.columns = ["Classe", "Famille", "Sous-Famille", "Quantité Totale", "Valeur Stock HT (DT)"]
+
+        st.dataframe(df_aff, use_container_width=True, hide_index=True, height=450)
+
+        entetes_s = list(df_aff.columns)
+        lignes_s = [[f"{v:,.3f}" if isinstance(v, float) else str(v) for v in row] for row in df_aff.values.tolist()]
+        eb1, eb2 = st.columns(2)
+        eb1.download_button("📄 Exporter Stock PDF", data=generer_pdf_memoire("Etat_du_Stock", entetes_s, lignes_s, paysage=True),
+                            file_name="Etat_du_Stock.pdf", mime="application/pdf")
+        eb2.download_button("📊 Exporter Stock Excel", data=generer_excel_memoire("Etat_du_Stock", entetes_s, lignes_s),
+                            file_name="Etat_du_Stock.xlsx")
+elif menu == "📋 Inventaire":
+    from operator import itemgetter
+    from datetime import date
+
+    itab1, itab2 = st.tabs(["📝 Pointage de Stock", "🔒 Stock Physique & Clôture"])
+
+    depts_actifs = db.lister_departements_complet(seulement_actifs=True)
+    articles_actifs = db.lister_articles_complet(seulement_actifs=True)
+
+    # ---------------- ONGLET 1 : POINTAGE DE STOCK ----------------
+    with itab1:
+        st.subheader("Saisie d'un nouveau pointage d'inventaire physique")
+        if not depts_actifs or not articles_actifs:
+            st.warning("Assurez-vous d'avoir au moins un département et un article actifs.")
+        else:
+            map_dp_inv = {itemgetter(0)(d): f"{itemgetter(0)(d)} - {itemgetter(1)(d)}" for d in depts_actifs}
+            c1, c2, c3 = st.columns(3)
+            num_inv = db.generer_numero_inventaire(str(date.today().year))
+            c1.text_input("N° Inventaire :", value=num_inv, disabled=True, key="inv_num_new")
+            date_inv = c2.date_input("Date du comptage :", value=date.today(), key="inv_date_new")
+            dept_inv = c3.selectbox("Département inventorié :", list(map_dp_inv.keys()),
+                                    format_func=lambda x: map_dp_inv[x], key="inv_dept_new")
+            obs_inv = st.text_input("Observation (ex: Inventaire fin de mois) :", key="inv_obs_new")
+
+            st.info(f"Saisissez les quantités physiques comptées dans **{dept_inv}** (le stock théorique est pré-rempli par défaut) :")
+
+            # Préparation du tableau de pointage éditable
+            lignes_prep = []
+            for a in articles_actifs:
+                ca = itemgetter(0)(a)
+                da = itemgetter(1)(a)
+                ua = itemgetter(6)(a)
+                pu = float(itemgetter(7)(a))
+                st_th = db.calculer_stock_article_dept(ca, dept_inv)
+                lignes_prep.append({
+                    "Code": ca,
+                    "Désignation": da,
+                    "Unité": ua,
+                    "Stock Théorique": st_th,
+                    "Stock Physique Compté": st_th,
+                    "PU HT": pu
+                })
+
+            df_pointage = st.data_editor(
+                pd.DataFrame(lignes_prep),
+                disabled=["Code", "Désignation", "Unité", "Stock Théorique", "PU HT"],
+                use_container_width=True,
+                hide_index=True,
+                key=f"editor_inv_{dept_inv}"
+            )
+
+            if st.button(f"💾 Enregistrer le pointage ({num_inv})", type="primary", key="btn_save_inv"):
+                lignes_a_sauver = []
+                for _, row in df_pointage.iterrows():
+                    lignes_a_sauver.append((
+                        row["Code"],
+                        row["Désignation"],
+                        row["Unité"],
+                        float(row["Stock Théorique"]),
+                        float(row["Stock Physique Compté"]),
+                        float(row["PU HT"])
+                    ))
+                ok, msg = db.sauvegarder_inventaire(num_inv, date_inv, dept_inv, obs_inv, lignes_a_sauver, creation=True)
+                if ok:
+                    st.success(msg)
+                    st.rerun()
+                else:
+                    st.error(msg)
+    # ---------------- ONGLET 2 : STOCK PHYSIQUE & CLÔTURE ----------------
+    with itab2:
+        st.subheader("Gestion des Inventaires Physiques (Consulter, Modifier, Clôturer, Déclôturer)")
+        inventaires = db.lister_inventaires()
+        if not inventaires:
+            st.info("Aucun inventaire enregistré pour le moment. Commencez par l'onglet 'Pointage de Stock'.")
+        else:
+            st.dataframe(pd.DataFrame([
+                {
+                    "N° Inventaire": itemgetter(0)(i),
+                    "Date": itemgetter(1)(i),
+                    "Département": itemgetter(2)(i),
+                    "Statut": "🔒 CLÔTURÉ" if itemgetter(3)(i) == "CLÔTURÉ" else "📝 BROUILLON",
+                    "Écart Valorisé (HT)": f"{itemgetter(5)(i):,.3f} DT",
+                    "Observation": itemgetter(4)(i)
+                }
+                for i in inventaires
+            ]), use_container_width=True, hide_index=True)
+
+            dict_inv = {itemgetter(0)(i): i for i in inventaires}
+            sel_inv = st.selectbox("Sélectionner un inventaire :", list(dict_inv.keys()), key="sel_inv_manage")
+            info_i = dict_inv[sel_inv]
+            statut_i = itemgetter(3)(info_i)
+            lignes_i = db.lire_lignes_inventaire(sel_inv)
+
+            st.markdown(f"**Détail de `{sel_inv}` — Département `{itemgetter(2)(info_i)}` — Statut : `{statut_i}`**")
+            df_det_inv = pd.DataFrame([
+                {
+                    "Code": itemgetter(0)(l),
+                    "Désignation": itemgetter(1)(l),
+                    "Unité": itemgetter(2)(l),
+                    "Stock Théorique": float(itemgetter(3)(l)),
+                    "Stock Physique": float(itemgetter(4)(l)),
+                    "Écart Qté": float(itemgetter(5)(l)),
+                    "PU HT": float(itemgetter(6)(l)),
+                    "Valeur Écart (HT)": float(itemgetter(7)(l))
+                }
+                for l in lignes_i
+            ])
+
+            if statut_i == "BROUILLON":
+                st.info("Cet inventaire est en mode BROUILLON : vous pouvez ajuster les quantités physiques ci-dessous avant de le clôturer.")
+                new_obs_i = st.text_input("Observation :", value=itemgetter(4)(info_i), key="edit_obs_inv")
+                df_mod_inv = st.data_editor(
+                    df_det_inv,
+                    disabled=["Code", "Désignation", "Unité", "Stock Théorique", "Écart Qté", "PU HT", "Valeur Écart (HT)"],
+                    use_container_width=True,
+                    hide_index=True,
+                    key=f"mod_ed_{sel_inv}"
+                )
+
+                c_act1, c_act2, c_act3 = st.columns(3)
+                if c_act1.button("💾 Enregistrer les modifications", type="primary", key="btn_upd_inv"):
+                    lignes_upd = []
+                    for _, r in df_mod_inv.iterrows():
+                        lignes_upd.append((r["Code"], r["Désignation"], r["Unité"], float(r["Stock Théorique"]), float(r["Stock Physique"]), float(r["PU HT"])))
+                    ok, msg = db.sauvegarder_inventaire(sel_inv, itemgetter(1)(info_i), itemgetter(2)(info_i), new_obs_i, lignes_upd, creation=False)
+                    if ok:
+                        st.success(msg)
+                        st.rerun()
+                    else:
+                        st.error(msg)
+
+                if c_act2.button("🔒 Clôturer cet inventaire", key="btn_clot_inv"):
+                    ok, msg = db.cloturer_inventaire(sel_inv)
+                    if ok:
+                        st.success(msg)
+                        st.rerun()
+                    else:
+                        st.error(msg)
+
+                if c_act3.button("🗑️ Supprimer l'inventaire", key="btn_del_inv"):
+                    ok, msg = db.supprimer_inventaire(sel_inv)
+                    if ok:
+                        st.success(msg)
+                        st.rerun()
+                    else:
+                        st.error(msg)
+            else:
+                st.dataframe(df_det_inv, use_container_width=True, hide_index=True)
+                st.warning("🔒 Cet inventaire est CLÔTURÉ : toute modification ou suppression est verrouillée.")
+                if st.button("🔓 Déclôturer pour modifier", key="btn_declot_inv"):
+                    ok, msg = db.decloturer_inventaire(sel_inv)
+                    if ok:
+                        st.warning(msg)
+                        st.rerun()
+                    else:
+                        st.error(msg)

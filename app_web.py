@@ -84,7 +84,7 @@ if not st.session_state.authentifie:
 st.sidebar.title("Navigation")
 menu = st.sidebar.radio(
     "Choisir un module :",
-    ["📊 Rapport Exécutif", "🛒 Achats & Stratégie", "🍽️ Consommations", "⚙️ Paramétrage de base", "🗂️ Base de données", "🧾 Achats & Mouvements", "🔄 Transferts", "📦 Stock", "📋 Inventaire", "📥 Import Excel"]
+    ["📊 Rapport Exécutif", "🛒 Achats & Stratégie", "🍽️ Consommations", "⚙️ Paramétrage de base", "🗂️ Base de données", "🧾 Achats & Mouvements", "🔄 Transferts", "📦 Stock", "📋 Inventaire", "📈 Gestion", "💰 Centre des Coûts", "📥 Import Excel"]
 )
 
 if st.sidebar.button("🔒 Verrouiller"):
@@ -1606,3 +1606,174 @@ elif menu == "📋 Inventaire":
                         st.rerun()
                     else:
                         st.error(msg)
+elif menu == "📈 Gestion":
+    from operator import itemgetter
+    from datetime import date
+
+    gtab1, gtab2 = st.tabs(["🛒 Gestion des Achats (ERP)", "🍽️ Gestion des Consommations (ERP)"])
+
+    c_d1, c_d2 = st.columns(2)
+    date_deb_g = c_d1.date_input("Du :", value=date(date.today().year, date.today().month, 1), key="gest_d1")
+    date_fin_g = c_d2.date_input("Au :", value=date.today(), key="gest_d2")
+
+    with gtab1:
+        st.subheader("Suivi des Achats & Réceptions sur la période")
+        achats_p = db.calculer_gestion_achats_periode(date_deb_g, date_fin_g)
+        if not achats_p:
+            st.info("Aucun mouvement d'achat (BR, ED, RF) enregistré sur cette période.")
+        else:
+            lignes_ga = []
+            tot_ht_a, tot_ttc_a = 0.0, 0.0
+            for tdoc, ddoc, num, fourn, dp, ca, da, sf, cl, qte, mht, mttc in achats_p:
+                signe = -1.0 if tdoc == "RF" else 1.0
+                tot_ht_a += signe * float(mht)
+                tot_ttc_a += signe * float(mttc)
+                lignes_ga.append({
+                    "Type": tdoc,
+                    "Date": ddoc,
+                    "N° Doc": num,
+                    "Fournisseur": fourn,
+                    "Dépôt": dp,
+                    "Classe": cl,
+                    "Sous-Famille": sf,
+                    "Article": f"{ca} - {da}",
+                    "Qté": f"{signe * float(qte):,.3f}",
+                    "Montant HT": f"{signe * float(mht):,.3f}",
+                    "Montant TTC": f"{signe * float(mttc):,.3f}"
+                })
+            k1, k2 = st.columns(2)
+            k1.metric("Total Achats Nets HT", f"{tot_ht_a:,.3f} DT")
+            k2.metric("Total Achats Nets TTC", f"{tot_ttc_a:,.3f} DT")
+            st.dataframe(pd.DataFrame(lignes_ga), use_container_width=True, hide_index=True, height=420)
+
+    with gtab2:
+        st.subheader("Suivi des Prélèvements & Transferts Consommateurs sur la période")
+        conso_p = db.calculer_couts_estimatifs(date_deb_g, date_fin_g, code_dept_filtre="TOUS")
+        if not conso_p:
+            st.info("Aucune consommation (Transfert validé ou Sortie directe) enregistrée sur cette période.")
+        else:
+            df_gc = pd.DataFrame(conso_p)
+            st.metric("Total Consommation Estimative (HT)", f"{df_gc['cout_ht'].sum():,.3f} DT")
+            df_gc_aff = df_gc[["dept", "classe", "sous_famille", "code_article", "designation", "unite", "qte", "cout_ht"]].copy()
+            df_gc_aff.columns = ["Département", "Classe", "Sous-Famille", "Code", "Désignation", "Unité", "Quantité", "Valeur HT (DT)"]
+            st.dataframe(df_gc_aff, use_container_width=True, hide_index=True, height=420)
+elif menu == "💰 Centre des Coûts":
+    from operator import itemgetter
+    from datetime import date
+
+    st.subheader("Analyse des Coûts F&B — Estimatif vs Réel Inventaire")
+
+    volet = st.radio(
+        "Choisir le volet de calcul :",
+        ["📊 Volet 1 : Estimatif (Prélèvements & Transferts)", "🔒 Volet 2 : Réel (Suite aux Inventaires Clôturés)"],
+        horizontal=True,
+        key="cc_volet"
+    )
+
+    depts_actifs = db.lister_departements_complet(seulement_actifs=True)
+    map_dp_cc = {itemgetter(0)(d): f"{itemgetter(0)(d)} - {itemgetter(1)(d)}" for d in depts_actifs}
+
+    donnees_cc = []
+    titre_periode = ""
+
+    if volet.startswith("📊"):
+        cc1, cc2, cc3 = st.columns(3)
+        d_deb_cc = cc1.date_input("Date début :", value=date(date.today().year, date.today().month, 1), key="cc_d1")
+        d_fin_cc = cc2.date_input("Date fin :", value=date.today(), key="cc_d2")
+        opts_dp = ["TOUS"] + list(map_dp_cc.keys())
+        dp_sel_cc = cc3.selectbox("Département :", opts_dp,
+                                  format_func=lambda x: "Tous les départements" if x == "TOUS" else map_dp_cc[x],
+                                  key="cc_dp_est")
+        donnees_cc = db.calculer_couts_estimatifs(d_deb_cc, d_fin_cc, code_dept_filtre=dp_sel_cc)
+        titre_periode = f"Estimatif_{d_deb_cc}_au_{d_fin_cc}"
+    else:
+        if not map_dp_cc:
+            st.warning("Aucun département actif trouvé.")
+        else:
+            dp_reel = st.selectbox("Département inventorié :", list(map_dp_cc.keys()),
+                                   format_func=lambda x: map_dp_cc[x], key="cc_dp_reel")
+            invs_clot = db.lister_inventaires_clotures_dept(dp_reel)
+            if not invs_clot:
+                st.warning(f"Aucun inventaire clôturé trouvé pour **{dp_reel}**. Clôturez d'abord un inventaire dans le module '📋 Inventaire'.")
+            else:
+                map_inv_c = {itemgetter(0)(i): f"{itemgetter(0)(i)} (du {itemgetter(1)(i)})" for i in invs_clot}
+                liste_nums_inv = list(map_inv_c.keys())
+                ic1, ic2 = st.columns(2)
+                opts_deb = ["AUCUN"] + liste_nums_inv
+                inv_deb = ic1.selectbox("Inventaire Initial (Stock Début) :", opts_deb,
+                                        format_func=lambda x: "0 - Début d'activité (Stock initial = 0)" if x == "AUCUN" else map_inv_c[x],
+                                        key="cc_inv_deb")
+                inv_fin = ic2.selectbox("Inventaire Final (Stock Fin Clôturé) :", liste_nums_inv,
+                                        index=len(liste_nums_inv) - 1,
+                                        format_func=lambda x: map_inv_c[x],
+                                        key="cc_inv_fin")
+                if inv_deb != "AUCUN" and inv_deb == inv_fin:
+                    st.error("L'inventaire initial et l'inventaire final doivent être différents.")
+                else:
+                    num_deb_reel = None if inv_deb == "AUCUN" else inv_deb
+                    donnees_cc = db.calculer_couts_reels_inventaire(dp_reel, num_deb_reel, inv_fin)
+                    titre_periode = f"Reel_{dp_reel}_{inv_fin}"
+    st.divider()
+    if not donnees_cc:
+        st.info("Aucune donnée de coût disponible pour la sélection actuelle.")
+    else:
+        df_cc = pd.DataFrame(donnees_cc)
+        cout_total_periode = df_cc["cout_ht"].sum()
+
+        # Paramètre provisoire des nuitées (en attendant le module dédié Adultes/Enfants/Bébés/Visiteurs)
+        kn1, kn2, kn3 = st.columns([1.5, 1.5, 2])
+        nb_nuitees_cc = kn1.number_input("Nuitées de la période (Provisoire) :", min_value=0.0, value=100.0, step=10.0, format="%.0f", key="cc_nuit_prov")
+        cout_nuitee_global = (cout_total_periode / nb_nuitees_cc) if nb_nuitees_cc > 0 else 0.0
+        kn2.metric("Coût Total Consommé (HT)", f"{cout_total_periode:,.3f} DT")
+        kn3.metric("Coût Moyen / Nuitée", f"{cout_nuitee_global:,.3f} DT")
+
+        ctab1, ctab2, ctab3, ctab4 = st.tabs([
+            "📦 Coût par Article",
+            "🏷️ Coût par Sous-Famille",
+            "📁 Coût par Classe",
+            "🛏️ Coût par Nuitée (Synthèse)"
+        ])
+
+        with ctab1:
+            df_art_cc = df_cc.groupby(["code_article", "designation", "unite", "classe", "sous_famille"], as_index=False).agg({"qte": "sum", "cout_ht": "sum"})
+            df_art_cc["part_pct"] = (df_art_cc["cout_ht"] / cout_total_periode * 100.0) if cout_total_periode > 0 else 0.0
+            df_art_cc["cout_nuitee"] = (df_art_cc["cout_ht"] / nb_nuitees_cc) if nb_nuitees_cc > 0 else 0.0
+            df_art_cc = df_art_cc.sort_values(by="cout_ht", ascending=False)
+            df_art_aff = df_art_cc[["code_article", "designation", "unite", "classe", "sous_famille", "qte", "cout_ht", "part_pct", "cout_nuitee"]].copy()
+            df_art_aff.columns = ["Code", "Désignation", "Unité", "Classe", "Sous-Famille", "Qté Conso", "Coût Total HT (DT)", "Part (%)", "Coût / Nuitée (DT)"]
+            st.dataframe(df_art_aff, use_container_width=True, hide_index=True, height=400)
+
+        with ctab2:
+            df_sf_cc = df_cc.groupby(["classe", "sous_famille"], as_index=False).agg({"qte": "sum", "cout_ht": "sum"})
+            df_sf_cc["part_pct"] = (df_sf_cc["cout_ht"] / cout_total_periode * 100.0) if cout_total_periode > 0 else 0.0
+            df_sf_cc["cout_nuitee"] = (df_sf_cc["cout_ht"] / nb_nuitees_cc) if nb_nuitees_cc > 0 else 0.0
+            df_sf_cc = df_sf_cc.sort_values(by="cout_ht", ascending=False)
+            df_sf_aff = df_sf_cc.copy()
+            df_sf_aff.columns = ["Classe", "Sous-Famille", "Qté Cumulée", "Coût Total HT (DT)", "Part (%)", "Coût / Nuitée (DT)"]
+            st.dataframe(df_sf_aff, use_container_width=True, hide_index=True, height=400)
+
+        with ctab3:
+            df_cl_cc = df_cc.groupby(["classe"], as_index=False).agg({"qte": "sum", "cout_ht": "sum"})
+            df_cl_cc["part_pct"] = (df_cl_cc["cout_ht"] / cout_total_periode * 100.0) if cout_total_periode > 0 else 0.0
+            df_cl_cc["cout_nuitee"] = (df_cl_cc["cout_ht"] / nb_nuitees_cc) if nb_nuitees_cc > 0 else 0.0
+            df_cl_cc = df_cl_cc.sort_values(by="cout_ht", ascending=False)
+            df_cl_aff = df_cl_cc.copy()
+            df_cl_aff.columns = ["Classe", "Qté Cumulée", "Coût Total HT (DT)", "Part (%)", "Coût / Nuitée (DT)"]
+            st.dataframe(df_cl_aff, use_container_width=True, hide_index=True, height=350)
+
+        with ctab4:
+            st.markdown("#### Ratio Coût / Nuitée par Département et par Classe")
+            df_nuit_cc = df_cc.groupby(["dept", "classe"], as_index=False).agg({"cout_ht": "sum"})
+            df_nuit_cc["cout_nuitee"] = (df_nuit_cc["cout_ht"] / nb_nuitees_cc) if nb_nuitees_cc > 0 else 0.0
+            df_nuit_cc["part_pct"] = (df_nuit_cc["cout_ht"] / cout_total_periode * 100.0) if cout_total_periode > 0 else 0.0
+            df_nuit_aff = df_nuit_cc.copy()
+            df_nuit_aff.columns = ["Département", "Classe", "Coût Total HT (DT)", "Coût / Nuitée (DT)", "Part (%)"]
+            st.dataframe(df_nuit_aff, use_container_width=True, hide_index=True)
+
+            entetes_cc = list(df_nuit_aff.columns)
+            lignes_cc = [[f"{v:,.3f}" if isinstance(v, float) else str(v) for v in row] for row in df_nuit_aff.values.tolist()]
+            bc1, bc2 = st.columns(2)
+            bc1.download_button("📄 Exporter Synthèse PDF", data=generer_pdf_memoire(f"Centre_Couts_{titre_periode}", entetes_cc, lignes_cc),
+                                file_name=f"Centre_Couts_{titre_periode}.pdf", mime="application/pdf")
+            bc2.download_button("📊 Exporter Synthèse Excel", data=generer_excel_memoire(f"Centre_Couts_{titre_periode}", entetes_cc, lignes_cc),
+                                file_name=f"Centre_Couts_{titre_periode}.xlsx")

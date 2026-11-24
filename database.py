@@ -1723,3 +1723,122 @@ def lister_nuitees_periode(date_deb, date_fin):
         "total_pondere": round(tot_pondere, 2)
     }
     return synthese, lignes
+# ==============================================================================
+# IMPORTATION INTELLIGENTE DU RÉFÉRENTIEL COMPLET (CLASSES, FAMILLES, SF, ARTICLES)
+# ==============================================================================
+
+def importer_base_articles_excel(chemin_excel, ecraser_existants=False):
+    """
+    Lit le fichier 'Base articles.xlsx' (entêtes ligne 5, données à partir ligne 6) :
+    Col A (0): Code Article (11 chiffres : 2 cl + 2 fam + 2 sf + 5 seq)
+    Col B (1): Désignation Article
+    Col C (2): Libellé Classe
+    Col D (3): Libellé Famille
+    Col E (4): Libellé Sous-Famille
+    Col F (5): Unité
+    Col J (9): PMP (Prix Achat HT)
+    """
+    wb = openpyxl.load_workbook(chemin_excel, data_only=True, read_only=True)
+    ws = wb.active
+    conn = get_connection()
+    nb_cl, nb_fam, nb_sf, nb_art = 0, 0, 0, 0
+    try:
+        c = conn.cursor()
+
+        # 1. Pré-enregistrement des 14 classes officielles
+        classes_std = [
+            ("01", "BOISSONS"), ("02", "ALIMENTATION"), ("03", "FRTS BUREAUX"),
+            ("04", "HYGIENE"), ("05", "FRTS CLIENTS"), ("06", "PME & PMC"),
+            ("07", "MAINTENANCE"), ("08", "LINGE & UNIFORME"), ("09", "EMBALLAGE"),
+            ("10", "PRODUITS PISCINES & SEL"), ("11", "EXTRA ARTICLES"),
+            ("12", "ANIMATION ARTICLES"), ("13", "THALASSO"), ("14", "ACHATS DIVERS")
+        ]
+        for c_code, c_lib in classes_std:
+            c.execute("INSERT OR IGNORE INTO classes (code, libelle, actif) VALUES (?, ?, 1)", (c_code, c_lib))
+            if c.rowcount > 0:
+                nb_cl += 1
+
+        # Correspondance Libellé Sous-Famille -> Code court officiel (pour compatibilité historique Excel)
+        map_lib_to_code_sf = {
+            "WATR": "WATR", "BEER": "BEER", "WHIW": "WHIW", "ROSW": "ROSW", "REDW": "REDW",
+            "SPAW": "SPAW", "INTS": "INTS", "NATS": "NATS", "SOFT": "SOFT",
+            "MEAT": "MEAT", "FISH": "FISH", "POUL": "POUL", "SAUS": "SAUS",
+            "DAIR": "DAIR", "EGGS": "EGGS", "THEC": "THEC", "MIXP": "MIXP",
+            "BRKF": "BRKF", "PATI": "PATI", "ICEC": "ICEC",
+            "VFRE": "VFRE", "VFRO": "VFRO", "VCAN": "VCAN", "FFRE": "FFRE",
+            "ORAN": "ORAN", "FFRO": "FFRO", "FCAN": "FCAN", "DRYP": "DRYP",
+            "PAST": "PAST", "BRED": "BRED", "OILF": "OILF", "SAUC": "SAUC",
+            "FRTS BUREAUX": "FRTS BUREAUX", "IMPRIMES": "IMPRIMES",
+            "CARTOUCHES,TON&RUBAN": "CARTOUCHES,TON&RUBAN",
+            "MATERIELS D'HYG & NE": "MATERIELS D'HYG & NE",
+            "PRODUITS D'HYG & NET": "PRODUITS D'HYG & NET",
+            "PRODUITS BUANDERIE": "PRODUITS BUANDERIE",
+            "FRTS GUESTS": "FRTS GUESTS",
+            "PRODUITS PISCINES": "PRODUITS PISCINES"
+        }
+
+        for row in ws.iter_rows(min_row=6, values_only=True):
+            raw_code = get_col(row, 0)
+            desig = get_col(row, 1)
+            if raw_code is None or desig is None:
+                continue
+
+            code_art = str(raw_code).strip()
+            if code_art.endswith(".0"):
+                code_art = code_art[:-2]
+            des_p = str(desig).strip()
+            if code_art == "" or des_p == "" or not code_art[0].isdigit():
+                continue
+
+            lib_cl = str(get_col(row, 2) or "").strip().upper()
+            lib_fam = str(get_col(row, 3) or "").strip().upper()
+            lib_sf = str(get_col(row, 4) or "").strip().upper()
+            unite_p = str(get_col(row, 5) or "Unité").strip()
+            pmp_p = nettoyer_nombre(get_col(row, 9))
+
+            # Extraction hiérarchique depuis le code (ex: 11 11 11 11006)
+            code_cl = code_art[:2] if len(code_art) >= 2 else "99"
+            code_fam = code_art[:4] if len(code_art) >= 4 else f"{code_cl}01"
+            code_sf_num = code_art[:6] if len(code_art) >= 6 else f"{code_fam}01"
+
+            # Utilise le code court officiel si connu (ex: WATR, MEAT), sinon le libellé ou code 6 chiffres
+            code_sf_final = map_lib_to_code_sf.get(lib_sf, lib_sf if lib_sf != "" else code_sf_num)
+
+            if lib_cl != "":
+                c.execute("INSERT OR IGNORE INTO classes (code, libelle, actif) VALUES (?, ?, 1)", (code_cl, lib_cl))
+                if c.rowcount > 0:
+                    nb_cl += 1
+
+            if lib_fam != "":
+                c.execute("INSERT OR IGNORE INTO familles (code, libelle, code_classe, actif) VALUES (?, ?, ?, 1)",
+                          (code_fam, lib_fam, code_cl))
+                if c.rowcount > 0:
+                    nb_fam += 1
+
+            if code_sf_final != "":
+                c.execute("INSERT OR IGNORE INTO sous_familles (code, libelle, code_famille, actif) VALUES (?, ?, ?, 1)",
+                          (code_sf_final, lib_sf or code_sf_final, code_fam))
+                if c.rowcount > 0:
+                    nb_sf += 1
+
+            if ecraser_existants:
+                c.execute("""INSERT OR REPLACE INTO articles
+                    (code, designation, classe, sous_famille, unite, prix_achat, tva, actif)
+                    VALUES (?, ?, ?, ?, ?, ?, 19.0, 1)""",
+                    (code_art, des_p, code_cl, code_sf_final, unite_p, pmp_p))
+                nb_art += 1
+            else:
+                c.execute("""INSERT OR IGNORE INTO articles
+                    (code, designation, classe, sous_famille, unite, prix_achat, tva, actif)
+                    VALUES (?, ?, ?, ?, ?, ?, 19.0, 1)""",
+                    (code_art, des_p, code_cl, code_sf_final, unite_p, pmp_p))
+                if c.rowcount > 0:
+                    nb_art += 1
+
+        conn.commit()
+        return True, (nb_cl, nb_fam, nb_sf, nb_art)
+    except Exception as e:
+        return False, str(e)
+    finally:
+        wb.close()
+        conn.close()

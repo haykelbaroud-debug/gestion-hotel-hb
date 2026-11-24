@@ -365,3 +365,198 @@ def supprimer_sous_famille(code):
         return True, "Sous-famille supprimée."
     finally:
         conn.close()
+# ==============================================================================
+# MODULE 2 : BASE DE DONNÉES (ARTICLES, FOURNISSEURS, DÉPARTEMENTS)
+# ==============================================================================
+
+def initialiser_referentiels_m2():
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        # Mise à niveau douce des tables existantes (articles & departements)
+        for col_sql in [
+            "ALTER TABLE articles ADD COLUMN unite TEXT DEFAULT 'Unité'",
+            "ALTER TABLE articles ADD COLUMN prix_achat REAL DEFAULT 0.0",
+            "ALTER TABLE articles ADD COLUMN tva REAL DEFAULT 19.0",
+            "ALTER TABLE articles ADD COLUMN actif INTEGER DEFAULT 1",
+            "ALTER TABLE departements ADD COLUMN actif INTEGER DEFAULT 1"
+        ]:
+            try:
+                c.execute(col_sql)
+            except Exception:
+                pass
+
+        c.execute("""CREATE TABLE IF NOT EXISTS fournisseurs (
+            code TEXT PRIMARY KEY,
+            nom TEXT NOT NULL,
+            telephone TEXT DEFAULT '',
+            matricule_fiscal TEXT DEFAULT '',
+            email TEXT DEFAULT '',
+            actif INTEGER DEFAULT 1
+        )""")
+        conn.commit()
+        c.close()
+    finally:
+        conn.close()
+
+# --- ARTICLES ---
+def lister_articles_complet(seulement_actifs=False):
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        sql = """
+            SELECT a.code, a.designation, COALESCE(a.sous_famille, ''),
+                   COALESCE(sf.libelle, ''), COALESCE(f.code, ''), COALESCE(cl.code, ''),
+                   COALESCE(a.unite, 'Unité'), COALESCE(a.prix_achat, 0.0),
+                   COALESCE(a.tva, 19.0), COALESCE(a.actif, 1)
+            FROM articles a
+            LEFT JOIN sous_familles sf ON UPPER(a.sous_famille) = UPPER(sf.code)
+            LEFT JOIN familles f ON sf.code_famille = f.code
+            LEFT JOIN classes cl ON f.code_classe = cl.code
+        """
+        if seulement_actifs:
+            sql += " WHERE COALESCE(a.actif, 1) = 1"
+        sql += " ORDER BY a.code"
+        c.execute(sql)
+        return c.fetchall()
+    finally:
+        conn.close()
+
+def sauvegarder_article(code, designation, sous_famille, unite, prix_achat, tva, actif=1, creation=True):
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        code_p = code.strip().upper()
+        des_p = designation.strip()
+        # Récupère automatiquement la classe si la sous-famille est paramétrée
+        c.execute("""
+            SELECT COALESCE(f.code_classe, '')
+            FROM sous_familles sf
+            LEFT JOIN familles f ON sf.code_famille = f.code
+            WHERE UPPER(sf.code) = UPPER(?)
+        """, (sous_famille,))
+        res_cl = c.fetchone()
+        classe_p = itemgetter(0)(res_cl) if res_cl else ""
+
+        if creation:
+            c.execute("SELECT 1 FROM articles WHERE UPPER(code) = ?", (code_p,))
+            if c.fetchone():
+                return False, f"Le code article '{code_p}' existe déjà."
+            c.execute("""INSERT INTO articles (code, designation, classe, sous_famille, unite, prix_achat, tva, actif)
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                      (code_p, des_p, classe_p, sous_famille, unite, float(prix_achat), float(tva), int(actif)))
+        else:
+            c.execute("""UPDATE articles
+                         SET designation = ?, classe = ?, sous_famille = ?, unite = ?, prix_achat = ?, tva = ?, actif = ?
+                         WHERE code = ?""",
+                      (des_p, classe_p, sous_famille, unite, float(prix_achat), float(tva), int(actif), code))
+        conn.commit()
+        return True, "Article enregistré avec succès."
+    finally:
+        conn.close()
+
+def supprimer_article(code):
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("SELECT COUNT(*) FROM achats WHERE UPPER(code_article) = UPPER(?)", (code,))
+        if itemgetter(0)(c.fetchone()) > 0:
+            return False, "Suppression impossible : cet article possède déjà un historique d'achats (désactivez-le plutôt)."
+        c.execute("DELETE FROM articles WHERE code = ?", (code,))
+        conn.commit()
+        return True, "Article supprimé."
+    finally:
+        conn.close()
+
+# --- FOURNISSEURS ---
+def lister_fournisseurs(seulement_actifs=False):
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        sql = "SELECT code, nom, COALESCE(telephone, ''), COALESCE(matricule_fiscal, ''), COALESCE(email, ''), actif FROM fournisseurs"
+        if seulement_actifs:
+            sql += " WHERE actif = 1"
+        sql += " ORDER BY nom"
+        c.execute(sql)
+        return c.fetchall()
+    finally:
+        conn.close()
+
+def sauvegarder_fournisseur(code, nom, telephone, matricule_fiscal, email, actif=1, creation=True):
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        code_p = code.strip().upper()
+        nom_p = nom.strip()
+        if creation:
+            c.execute("SELECT 1 FROM fournisseurs WHERE code = ?", (code_p,))
+            if c.fetchone():
+                return False, f"Le code fournisseur '{code_p}' existe déjà."
+            c.execute("INSERT INTO fournisseurs (code, nom, telephone, matricule_fiscal, email, actif) VALUES (?, ?, ?, ?, ?, ?)",
+                      (code_p, nom_p, telephone.strip(), matricule_fiscal.strip(), email.strip(), int(actif)))
+        else:
+            c.execute("""UPDATE fournisseurs
+                         SET nom = ?, telephone = ?, matricule_fiscal = ?, email = ?, actif = ?
+                         WHERE code = ?""",
+                      (nom_p, telephone.strip(), matricule_fiscal.strip(), email.strip(), int(actif), code))
+        conn.commit()
+        return True, "Fournisseur enregistré avec succès."
+    finally:
+        conn.close()
+
+def supprimer_fournisseur(code):
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("DELETE FROM fournisseurs WHERE code = ?", (code,))
+        conn.commit()
+        return True, "Fournisseur supprimé."
+    finally:
+        conn.close()
+
+# --- DÉPARTEMENTS ---
+def lister_departements_complet(seulement_actifs=False):
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        sql = "SELECT code_court, nom_long, COALESCE(actif, 1) FROM departements"
+        if seulement_actifs:
+            sql += " WHERE COALESCE(actif, 1) = 1"
+        sql += " ORDER BY code_court"
+        c.execute(sql)
+        return c.fetchall()
+    finally:
+        conn.close()
+
+def sauvegarder_departement(code_court, nom_long, actif=1, creation=True):
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        code_p = code_court.strip().upper()
+        nom_p = nom_long.strip()
+        if creation:
+            c.execute("SELECT 1 FROM departements WHERE UPPER(code_court) = ?", (code_p,))
+            if c.fetchone():
+                return False, f"Le code département '{code_p}' existe déjà."
+            c.execute("INSERT INTO departements (code_court, nom_long, actif) VALUES (?, ?, ?)",
+                      (code_p, nom_p, int(actif)))
+        else:
+            c.execute("UPDATE departements SET nom_long = ?, actif = ? WHERE code_court = ?",
+                      (nom_p, int(actif), code_court))
+        conn.commit()
+        return True, "Département enregistré avec succès."
+    finally:
+        conn.close()
+
+def supprimer_departement(code_court):
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("SELECT COUNT(*) FROM transferts WHERE UPPER(code_dept) = UPPER(?)", (code_court,))
+        if itemgetter(0)(c.fetchone()) > 0:
+            return False, "Suppression impossible : ce département possède déjà des consommations enregistrées."
+        c.execute("DELETE FROM departements WHERE code_court = ?", (code_court,))
+        conn.commit()
+        return True, "Département supprimé."
+    finally:
+        conn.close()

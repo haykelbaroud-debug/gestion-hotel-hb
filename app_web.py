@@ -14,6 +14,7 @@ st.set_page_config(
 )
 
 db.initialiser_base()
+db.initialiser_parametrage()
 
 def generer_excel_memoire(titre, entetes, lignes):
     import openpyxl
@@ -79,7 +80,7 @@ if not st.session_state.authentifie:
 st.sidebar.title("Navigation")
 menu = st.sidebar.radio(
     "Choisir un module :",
-    ["📊 Rapport Exécutif", "🛒 Achats & Stratégie", "🍽️ Consommations", "📥 Import Excel"]
+    ["📊 Rapport Exécutif", "🛒 Achats & Stratégie", "🍽️ Consommations", "⚙️ Paramétrage de base", "📥 Import Excel"]
 )
 
 if st.sidebar.button("🔒 Verrouiller"):
@@ -398,3 +399,208 @@ elif menu == "🍽️ Consommations":
             st.dataframe(df_a, use_container_width=True, hide_index=True, height=350)
         conn.close()
 
+elif menu == "⚙️ Paramétrage de base":
+    from operator import itemgetter
+    ptab1, ptab2, ptab3 = st.tabs(["📁 Classes", "📂 Familles", "🏷️ Sous-Familles"])
+
+    with ptab1:
+        col_form, col_liste = st.columns(2)
+        classes = db.lister_classes()
+        dict_classes = {itemgetter(0)(r): r for r in classes}
+
+        with col_form:
+            st.subheader("Fiche Classe")
+            mode_cl = st.radio("Action :", ["➕ Ajouter", "✏️ Modifier / Statut / Supprimer"], key="mode_cl", horizontal=True)
+            if mode_cl == "➕ Ajouter":
+                c_code = st.text_input("Code Classe (ex: FB, GEN) :", key="add_cl_code")
+                c_lib = st.text_input("Libellé Classe :", key="add_cl_lib")
+                c_act = st.checkbox("Actif", value=True, key="add_cl_act")
+                if st.button("Enregistrer la Classe", type="primary", key="btn_add_cl"):
+                    if c_code.strip() and c_lib.strip():
+                        ok, msg = db.sauvegarder_classe(c_code, c_lib, c_act, creation=True)
+                        if ok:
+                            st.success(msg)
+                            st.rerun()
+                        else:
+                            st.error(msg)
+                    else:
+                        st.warning("Veuillez remplir le code et le libellé.")
+            else:
+                if dict_classes:
+                    sel_cl = st.selectbox("Sélectionner une classe :", list(dict_classes.keys()),
+                                          format_func=lambda x: f"{x} - {itemgetter(1)(dict_classes[x])}", key="sel_edit_cl")
+                    _, lib_actuel, act_actuel = dict_classes[sel_cl]
+                    new_lib = st.text_input("Libellé :", value=lib_actuel, key="edit_cl_lib")
+                    new_act = st.checkbox("Actif", value=bool(act_actuel), key="edit_cl_act")
+                    b1, b2 = st.columns(2)
+                    if b1.button("💾 Mettre à jour", type="primary", key="btn_upd_cl"):
+                        ok, msg = db.sauvegarder_classe(sel_cl, new_lib, new_act, creation=False)
+                        st.success(msg)
+                        st.rerun()
+                    if b2.button("🗑️ Supprimer", key="btn_del_cl"):
+                        ok, msg = db.supprimer_classe(sel_cl)
+                        if ok:
+                            st.success(msg)
+                            st.rerun()
+                        else:
+                            st.error(msg)
+                else:
+                    st.info("Aucune classe enregistrée.")
+
+        with col_liste:
+            st.subheader("Liste des Classes")
+            if classes:
+                df_cl = pd.DataFrame([
+                    {
+                        "Code": itemgetter(0)(r),
+                        "Libellé": itemgetter(1)(r),
+                        "Statut": "✅ Actif" if itemgetter(2)(r) == 1 else "⛔ Désactivé"
+                    }
+                    for r in classes
+                ])
+                st.dataframe(df_cl, use_container_width=True, hide_index=True)
+            else:
+                st.info("Commencez par ajouter votre première classe à gauche.")
+
+    with ptab2:
+        col_form, col_liste = st.columns(2)
+        classes_actives = db.lister_classes(seulement_actives=True)
+        toutes_classes = db.lister_classes()
+        familles = db.lister_familles()
+        dict_fam = {itemgetter(0)(r): r for r in familles}
+
+        with col_form:
+            st.subheader("Fiche Famille")
+            mode_fam = st.radio("Action :", ["➕ Ajouter", "✏️ Modifier / Statut / Supprimer"], key="mode_fam", horizontal=True)
+            if mode_fam == "➕ Ajouter":
+                if classes_actives:
+                    map_cl_act = {itemgetter(0)(r): f"{itemgetter(0)(r)} - {itemgetter(1)(r)}" for r in classes_actives}
+                    f_cl = st.selectbox("Classe parente :", list(map_cl_act.keys()), format_func=lambda x: map_cl_act[x], key="add_fam_cl")
+                    f_code = st.text_input("Code Famille (ex: BOIS, VIAND) :", key="add_fam_code")
+                    f_lib = st.text_input("Libellé Famille :", key="add_fam_lib")
+                    f_act = st.checkbox("Actif", value=True, key="add_fam_act")
+                    if st.button("Enregistrer la Famille", type="primary", key="btn_add_fam"):
+                        if f_code.strip() and f_lib.strip():
+                            ok, msg = db.sauvegarder_famille(f_code, f_lib, f_cl, f_act, creation=True)
+                            if ok:
+                                st.success(msg)
+                                st.rerun()
+                            else:
+                                st.error(msg)
+                        else:
+                            st.warning("Veuillez remplir le code et le libellé.")
+                else:
+                    st.warning("Créez et activez d'abord au moins une Classe.")
+            else:
+                if dict_fam and toutes_classes:
+                    sel_fam = st.selectbox("Sélectionner une famille :", list(dict_fam.keys()),
+                                           format_func=lambda x: f"{x} - {itemgetter(1)(dict_fam[x])}", key="sel_edit_fam")
+                    _, lib_f, cl_f, _, act_f = dict_fam[sel_fam]
+                    map_cl_all = {itemgetter(0)(r): f"{itemgetter(0)(r)} - {itemgetter(1)(r)}" for r in toutes_classes}
+                    idx_cl = list(map_cl_all.keys()).index(cl_f) if cl_f in map_cl_all else 0
+                    new_cl_f = st.selectbox("Classe parente :", list(map_cl_all.keys()), index=idx_cl,
+                                            format_func=lambda x: map_cl_all[x], key="edit_fam_cl")
+                    new_lib_f = st.text_input("Libellé :", value=lib_f, key="edit_fam_lib")
+                    new_act_f = st.checkbox("Actif", value=bool(act_f), key="edit_fam_act")
+                    b1, b2 = st.columns(2)
+                    if b1.button("💾 Mettre à jour", type="primary", key="btn_upd_fam"):
+                        ok, msg = db.sauvegarder_famille(sel_fam, new_lib_f, new_cl_f, new_act_f, creation=False)
+                        st.success(msg)
+                        st.rerun()
+                    if b2.button("🗑️ Supprimer", key="btn_del_fam"):
+                        ok, msg = db.supprimer_famille(sel_fam)
+                        if ok:
+                            st.success(msg)
+                            st.rerun()
+                        else:
+                            st.error(msg)
+                else:
+                    st.info("Aucune famille enregistrée.")
+
+        with col_liste:
+            st.subheader("Liste des Familles")
+            if familles:
+                df_fam = pd.DataFrame([
+                    {
+                        "Classe": f"{itemgetter(2)(r)} ({itemgetter(3)(r)})",
+                        "Code Famille": itemgetter(0)(r),
+                        "Libellé Famille": itemgetter(1)(r),
+                        "Statut": "✅ Actif" if itemgetter(4)(r) == 1 else "⛔ Désactivé"
+                    }
+                    for r in familles
+                ])
+                st.dataframe(df_fam, use_container_width=True, hide_index=True)
+            else:
+                st.info("Aucune famille enregistrée.")
+    with ptab3:
+        col_form, col_liste = st.columns(2)
+        fam_actives = db.lister_familles(seulement_actives=True)
+        toutes_fam = db.lister_familles()
+        sous_familles = db.lister_sous_familles()
+        dict_sf = {itemgetter(0)(r): r for r in sous_familles}
+
+        with col_form:
+            st.subheader("Fiche Sous-Famille")
+            mode_sf = st.radio("Action :", ["➕ Ajouter", "✏️ Modifier / Statut / Supprimer"], key="mode_sf", horizontal=True)
+            if mode_sf == "➕ Ajouter":
+                if fam_actives:
+                    map_fam_act = {itemgetter(0)(r): f"[{itemgetter(2)(r)}] {itemgetter(0)(r)} - {itemgetter(1)(r)}" for r in fam_actives}
+                    sf_fam = st.selectbox("Famille parente :", list(map_fam_act.keys()),
+                                          format_func=lambda x: map_fam_act[x], key="add_sf_fam")
+                    sf_code = st.text_input("Code Sous-Famille (ex: SOFT, MEAT) :", key="add_sf_code")
+                    sf_lib = st.text_input("Libellé Sous-Famille :", key="add_sf_lib")
+                    sf_act = st.checkbox("Actif", value=True, key="add_sf_act")
+                    if st.button("Enregistrer la Sous-Famille", type="primary", key="btn_add_sf"):
+                        if sf_code.strip() and sf_lib.strip():
+                            ok, msg = db.sauvegarder_sous_famille(sf_code, sf_lib, sf_fam, sf_act, creation=True)
+                            if ok:
+                                st.success(msg)
+                                st.rerun()
+                            else:
+                                st.error(msg)
+                        else:
+                            st.warning("Veuillez remplir le code et le libellé.")
+                else:
+                    st.warning("Créez et activez d'abord au moins une Famille.")
+            else:
+                if dict_sf and toutes_fam:
+                    sel_sf = st.selectbox("Sélectionner une sous-famille :", list(dict_sf.keys()),
+                                          format_func=lambda x: f"{x} - {itemgetter(1)(dict_sf[x])}", key="sel_edit_sf")
+                    _, lib_sf, fam_sf, _, _, _, act_sf = dict_sf[sel_sf]
+                    map_fam_all = {itemgetter(0)(r): f"[{itemgetter(2)(r)}] {itemgetter(0)(r)} - {itemgetter(1)(r)}" for r in toutes_fam}
+                    idx_fam = list(map_fam_all.keys()).index(fam_sf) if fam_sf in map_fam_all else 0
+                    new_fam_sf = st.selectbox("Famille parente :", list(map_fam_all.keys()), index=idx_fam,
+                                              format_func=lambda x: map_fam_all[x], key="edit_sf_fam")
+                    new_lib_sf = st.text_input("Libellé :", value=lib_sf, key="edit_sf_lib")
+                    new_act_sf = st.checkbox("Actif", value=bool(act_sf), key="edit_sf_act")
+                    b1, b2 = st.columns(2)
+                    if b1.button("💾 Mettre à jour", type="primary", key="btn_upd_sf"):
+                        ok, msg = db.sauvegarder_sous_famille(sel_sf, new_lib_sf, new_fam_sf, new_act_sf, creation=False)
+                        st.success(msg)
+                        st.rerun()
+                    if b2.button("🗑️ Supprimer", key="btn_del_sf"):
+                        ok, msg = db.supprimer_sous_famille(sel_sf)
+                        if ok:
+                            st.success(msg)
+                            st.rerun()
+                        else:
+                            st.error(msg)
+                else:
+                    st.info("Aucune sous-famille enregistrée.")
+
+        with col_liste:
+            st.subheader("Liste des Sous-Familles")
+            if sous_familles:
+                df_sf = pd.DataFrame([
+                    {
+                        "Classe": f"{itemgetter(4)(r)} ({itemgetter(5)(r)})",
+                        "Famille": f"{itemgetter(2)(r)} ({itemgetter(3)(r)})",
+                        "Code Sous-Famille": itemgetter(0)(r),
+                        "Libellé Sous-Famille": itemgetter(1)(r),
+                        "Statut": "✅ Actif" if itemgetter(6)(r) == 1 else "⛔ Désactivé"
+                    }
+                    for r in sous_familles
+                ])
+                st.dataframe(df_sf, use_container_width=True, hide_index=True)
+            else:
+                st.info("Aucune sous-famille enregistrée.")

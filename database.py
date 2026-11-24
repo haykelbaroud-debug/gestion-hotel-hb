@@ -192,3 +192,176 @@ def importer_depuis_excel(chemin_excel):
     finally:
         wb.close()
         conn.close()
+# ==============================================================================
+# MODULE 1 : PARAMÉTRAGE DE BASE (CLASSES, FAMILLES, SOUS-FAMILLES)
+# ==============================================================================
+
+def initialiser_parametrage():
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("""CREATE TABLE IF NOT EXISTS classes (
+            code TEXT PRIMARY KEY,
+            libelle TEXT NOT NULL,
+            actif INTEGER DEFAULT 1
+        )""")
+        c.execute("""CREATE TABLE IF NOT EXISTS familles (
+            code TEXT PRIMARY KEY,
+            libelle TEXT NOT NULL,
+            code_classe TEXT NOT NULL,
+            actif INTEGER DEFAULT 1,
+            FOREIGN KEY (code_classe) REFERENCES classes(code)
+        )""")
+        c.execute("""CREATE TABLE IF NOT EXISTS sous_familles (
+            code TEXT PRIMARY KEY,
+            libelle TEXT NOT NULL,
+            code_famille TEXT NOT NULL,
+            actif INTEGER DEFAULT 1,
+            FOREIGN KEY (code_famille) REFERENCES familles(code)
+        )""")
+        conn.commit()
+        c.close()
+    finally:
+        conn.close()
+
+def lister_classes(seulement_actives=False):
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        if seulement_actives:
+            c.execute("SELECT code, libelle, actif FROM classes WHERE actif = 1 ORDER BY code")
+        else:
+            c.execute("SELECT code, libelle, actif FROM classes ORDER BY code")
+        return c.fetchall()
+    finally:
+        conn.close()
+
+def sauvegarder_classe(code, libelle, actif=1, creation=True):
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        code_p = code.strip().upper()
+        lib_p = libelle.strip()
+        if creation:
+            c.execute("SELECT 1 FROM classes WHERE code = ?", (code_p,))
+            if c.fetchone():
+                return False, f"Le code classe '{code_p}' existe déjà."
+            c.execute("INSERT INTO classes (code, libelle, actif) VALUES (?, ?, ?)", (code_p, lib_p, int(actif)))
+        else:
+            c.execute("UPDATE classes SET libelle = ?, actif = ? WHERE code = ?", (lib_p, int(actif), code_p))
+        conn.commit()
+        return True, "Classe enregistrée avec succès."
+    finally:
+        conn.close()
+
+def supprimer_classe(code):
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("SELECT COUNT(*) FROM familles WHERE code_classe = ?", (code,))
+        if itemgetter(0)(c.fetchone()) > 0:
+            return False, "Suppression impossible : des familles sont rattachées à cette classe."
+        c.execute("DELETE FROM classes WHERE code = ?", (code,))
+        conn.commit()
+        return True, "Classe supprimée."
+    finally:
+        conn.close()
+
+def lister_familles(seulement_actives=False):
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        sql = """
+            SELECT f.code, f.libelle, f.code_classe, COALESCE(cl.libelle, ''), f.actif
+            FROM familles f
+            LEFT JOIN classes cl ON f.code_classe = cl.code
+        """
+        if seulement_actives:
+            sql += " WHERE f.actif = 1"
+        sql += " ORDER BY f.code_classe, f.code"
+        c.execute(sql)
+        return c.fetchall()
+    finally:
+        conn.close()
+
+def sauvegarder_famille(code, libelle, code_classe, actif=1, creation=True):
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        code_p = code.strip().upper()
+        lib_p = libelle.strip()
+        if creation:
+            c.execute("SELECT 1 FROM familles WHERE code = ?", (code_p,))
+            if c.fetchone():
+                return False, f"Le code famille '{code_p}' existe déjà."
+            c.execute("INSERT INTO familles (code, libelle, code_classe, actif) VALUES (?, ?, ?, ?)",
+                      (code_p, lib_p, code_classe, int(actif)))
+        else:
+            c.execute("UPDATE familles SET libelle = ?, code_classe = ?, actif = ? WHERE code = ?",
+                      (lib_p, code_classe, int(actif), code_p))
+        conn.commit()
+        return True, "Famille enregistrée avec succès."
+    finally:
+        conn.close()
+
+def supprimer_famille(code):
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("SELECT COUNT(*) FROM sous_familles WHERE code_famille = ?", (code,))
+        if itemgetter(0)(c.fetchone()) > 0:
+            return False, "Suppression impossible : des sous-familles sont rattachées à cette famille."
+        c.execute("DELETE FROM familles WHERE code = ?", (code,))
+        conn.commit()
+        return True, "Famille supprimée."
+    finally:
+        conn.close()
+
+def lister_sous_familles(seulement_actives=False):
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        sql = """
+            SELECT sf.code, sf.libelle, sf.code_famille, COALESCE(f.libelle, ''),
+                   COALESCE(f.code_classe, ''), COALESCE(cl.libelle, ''), sf.actif
+            FROM sous_familles sf
+            LEFT JOIN familles f ON sf.code_famille = f.code
+            LEFT JOIN classes cl ON f.code_classe = cl.code
+        """
+        if seulement_actives:
+            sql += " WHERE sf.actif = 1"
+        sql += " ORDER BY f.code_classe, sf.code_famille, sf.code"
+        c.execute(sql)
+        return c.fetchall()
+    finally:
+        conn.close()
+
+def sauvegarder_sous_famille(code, libelle, code_famille, actif=1, creation=True):
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        code_p = code.strip().upper()
+        lib_p = libelle.strip()
+        if creation:
+            c.execute("SELECT 1 FROM sous_familles WHERE code = ?", (code_p,))
+            if c.fetchone():
+                return False, f"Le code sous-famille '{code_p}' existe déjà."
+            c.execute("INSERT INTO sous_familles (code, libelle, code_famille, actif) VALUES (?, ?, ?, ?)",
+                      (code_p, lib_p, code_famille, int(actif)))
+        else:
+            c.execute("UPDATE sous_familles SET libelle = ?, code_famille = ?, actif = ? WHERE code = ?",
+                      (lib_p, code_famille, int(actif), code_p))
+        conn.commit()
+        return True, "Sous-famille enregistrée avec succès."
+    finally:
+        conn.close()
+
+def supprimer_sous_famille(code):
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("DELETE FROM sous_familles WHERE code = ?", (code,))
+        conn.commit()
+        return True, "Sous-famille supprimée."
+    finally:
+        conn.close()

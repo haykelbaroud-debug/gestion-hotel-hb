@@ -741,3 +741,252 @@ def supprimer_document_achat(numero_doc):
         return True, f"Document {numero_doc} supprimé."
     finally:
         conn.close()
+# ==============================================================================
+# MODULE 4 : TRANSFERTS INTER-DÉPARTEMENTS & CALCUL DU STOCK TEMPS RÉEL
+# ==============================================================================
+
+def initialiser_transferts_m4():
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("""CREATE TABLE IF NOT EXISTS doc_transferts (
+            numero TEXT PRIMARY KEY,
+            type_doc TEXT NOT NULL,
+            date_doc TEXT NOT NULL,
+            dept_source TEXT NOT NULL,
+            dept_dest TEXT NOT NULL,
+            statut TEXT NOT NULL,
+            observation TEXT DEFAULT '',
+            ref_demande TEXT DEFAULT ''
+        )""")
+
+        c.execute("""CREATE TABLE IF NOT EXISTS doc_transferts_lignes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            numero_doc TEXT NOT NULL,
+            code_article TEXT NOT NULL,
+            designation TEXT NOT NULL,
+            unite TEXT DEFAULT 'Unité',
+            qte_demandee REAL NOT NULL,
+            qte_validee REAL NOT NULL,
+            prix_unitaire_ht REAL DEFAULT 0.0,
+            montant_ht REAL DEFAULT 0.0,
+            FOREIGN KEY (numero_doc) REFERENCES doc_transferts(numero)
+        )""")
+        conn.commit()
+        c.close()
+    finally:
+        conn.close()
+
+def calculer_stock_article_dept(code_article, code_dept, ignorer_doc_transfert=None):
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("""
+            SELECT COALESCE(SUM(l.qte), 0.0)
+            FROM doc_achats_lignes l
+            JOIN doc_achats d ON l.numero_doc = d.numero
+            WHERE UPPER(l.code_article) = UPPER(?)
+              AND UPPER(d.code_dept) = UPPER(?)
+              AND d.type_doc IN ('BR', 'ED')
+        """, (code_article, code_dept))
+        entrees_achats = float(itemgetter(0)(c.fetchone()))
+
+        c.execute("""
+            SELECT COALESCE(SUM(l.qte), 0.0)
+            FROM doc_achats_lignes l
+            JOIN doc_achats d ON l.numero_doc = d.numero
+            WHERE UPPER(l.code_article) = UPPER(?)
+              AND UPPER(d.code_dept) = UPPER(?)
+              AND d.type_doc IN ('RF', 'SD')
+        """, (code_article, code_dept))
+        sorties_achats = float(itemgetter(0)(c.fetchone()))
+
+        sql_in = """
+            SELECT COALESCE(SUM(l.qte_validee), 0.0)
+            FROM doc_transferts_lignes l
+            JOIN doc_transferts d ON l.numero_doc = d.numero
+            WHERE UPPER(l.code_article) = UPPER(?)
+              AND UPPER(d.dept_dest) = UPPER(?)
+              AND d.type_doc = 'BT' AND d.statut = 'VALIDÉ'
+        """
+        params_in = [code_article, code_dept]
+        if ignorer_doc_transfert:
+            sql_in += " AND d.numero != ?"
+            params_in.append(ignorer_doc_transfert)
+        c.execute(sql_in, params_in)
+        entrees_trans = float(itemgetter(0)(c.fetchone()))
+
+        sql_out = """
+            SELECT COALESCE(SUM(l.qte_validee), 0.0)
+            FROM doc_transferts_lignes l
+            JOIN doc_transferts d ON l.numero_doc = d.numero
+            WHERE UPPER(l.code_article) = UPPER(?)
+              AND UPPER(d.dept_source) = UPPER(?)
+              AND d.type_doc = 'BT' AND d.statut = 'VALIDÉ'
+        """
+        params_out = [code_article, code_dept]
+        if ignorer_doc_transfert:
+            sql_out += " AND d.numero != ?"
+            params_out.append(ignorer_doc_transfert)
+        c.execute(sql_out, params_out)
+        sorties_trans = float(itemgetter(0)(c.fetchone()))
+
+        stock = entrees_achats - sorties_achats + entrees_trans - sorties_trans
+        return round(stock, 3)
+    finally:
+        conn.close()
+
+def generer_numero_transfert(prefixe, annee="2026"):
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        motif = f"{prefixe}-{annee}-%"
+        c.execute("SELECT numero FROM doc_transferts WHERE numero LIKE ? ORDER BY numero DESC LIMIT 1", (motif,))
+        res = c.fetchone()
+        if res:
+            dernier = itemgetter(0)(res)
+            try:
+                seq = int(dernier.split("-").pop()) + 1
+            except Exception:
+                seq = 1
+        else:
+            seq = 1
+        return f"{prefixe}-{annee}-{seq:04d}"
+    finally:
+        conn.close()
+def enregistrer_transfert(numero, type_doc, date_doc, dept_source, dept_dest, statut, obs, lignes, creation=True, ref_demande=""):
+    if dept_source == dept_dest:
+        return False, "Le département source et le département destinataire doivent être différents."
+    if not lignes:
+        return False, "Veuillez ajouter au moins une ligne d'article."
+
+    if type_doc == "BT" and statut == "VALIDÉ":
+        ignorer = None if creation else numero
+        for code_a, des_a, u_a, q_dem, q_val, pu in lignes:
+            if float(q_val) > 0:
+                dispo = calculer_stock_article_dept(code_a, dept_source, ignorer_doc_transfert=ignorer)
+                if float(q_val) > dispo:
+                    return False, f"Stock insuffisant pour '{code_a} - {des_a}' dans {dept_source} (Disponible : {dispo:,.3f} {u_a}, Demandé : {float(q_val):,.3f} {u_a})."
+
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        if creation:
+            c.execute("""INSERT INTO doc_transferts
+                (numero, type_doc, date_doc, dept_source, dept_dest, statut, observation, ref_demande)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (numero, type_doc, str(date_doc), dept_source, dept_dest, statut, obs.strip(), ref_demande))
+        else:
+            c.execute("""UPDATE doc_transferts
+                SET date_doc = ?, dept_source = ?, dept_dest = ?, statut = ?, observation = ?
+                WHERE numero = ?""",
+                (str(date_doc), dept_source, dept_dest, statut, obs.strip(), numero))
+            c.execute("DELETE FROM doc_transferts_lignes WHERE numero_doc = ?", (numero,))
+
+        for code_a, des_a, u_a, q_dem, q_val, pu in lignes:
+            m_ht = round(float(q_val) * float(pu), 3)
+            c.execute("""INSERT INTO doc_transferts_lignes
+                (numero_doc, code_article, designation, unite, qte_demandee, qte_validee, prix_unitaire_ht, montant_ht)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (numero, code_a, des_a, u_a, float(q_dem), float(q_val), float(pu), m_ht))
+
+        conn.commit()
+        return True, f"Document {numero} ({statut}) enregistré avec succès."
+    finally:
+        conn.close()
+
+def valider_demande_et_generer_bt(num_demande, date_bt, lignes_validees, obs_validation=""):
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("SELECT dept_source, dept_dest FROM doc_transferts WHERE numero = ?", (num_demande,))
+        res = c.fetchone()
+        if not res:
+            return False, "Demande introuvable."
+        dept_src, dept_dst = itemgetter(0)(res), itemgetter(1)(res)
+    finally:
+        conn.close()
+
+    lignes_bt = []
+    for code_a, des_a, u_a, q_dem, q_acc, pu in lignes_validees:
+        if float(q_acc) > 0:
+            dispo = calculer_stock_article_dept(code_a, dept_src)
+            if float(q_acc) > dispo:
+                return False, f"Blocage : Stock insuffisant dans {dept_src} pour '{code_a} - {des_a}' (Stock existant : {dispo:,.3f} {u_a}, Accordé : {float(q_acc):,.3f} {u_a})."
+            lignes_bt.append((code_a, des_a, u_a, float(q_dem), float(q_acc), float(pu)))
+
+    if not lignes_bt:
+        return False, "Aucune quantité accordée supérieure à 0."
+
+    num_bt = generer_numero_transfert("BT", str(date_bt)[:4])
+    ok, msg = enregistrer_transfert(
+        num_bt, "BT", date_bt, dept_src, dept_dst, "VALIDÉ",
+        f"Généré depuis {num_demande}. {obs_validation}".strip(),
+        lignes_bt, creation=True, ref_demande=num_demande
+    )
+    if not ok:
+        return False, msg
+
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("UPDATE doc_transferts SET statut = 'GÉNÉRÉ' WHERE numero = ?", (num_demande,))
+        conn.commit()
+        return True, f"Demande {num_demande} validée ! Bon de transfert {num_bt} généré et stock mis à jour."
+    finally:
+        conn.close()
+
+def changer_statut_demande(num_demande, nouveau_statut):
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("UPDATE doc_transferts SET statut = ? WHERE numero = ?", (nouveau_statut, num_demande))
+        conn.commit()
+        return True, f"Demande {num_demande} passée au statut '{nouveau_statut}'."
+    finally:
+        conn.close()
+
+def lister_transferts(type_doc, statut_filtre=None):
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        sql = """
+            SELECT d.numero, d.date_doc, d.dept_source, d.dept_dest, d.statut, d.observation, d.ref_demande,
+                   COALESCE((SELECT SUM(montant_ht) FROM doc_transferts_lignes l WHERE l.numero_doc = d.numero), 0.0)
+            FROM doc_transferts d
+            WHERE d.type_doc = ?
+        """
+        params = [type_doc]
+        if statut_filtre:
+            sql += " AND d.statut = ?"
+            params.append(statut_filtre)
+        sql += " ORDER BY d.date_doc DESC, d.numero DESC"
+        c.execute(sql, params)
+        return c.fetchall()
+    finally:
+        conn.close()
+
+def lire_lignes_transfert(numero_doc):
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("""
+            SELECT code_article, designation, unite, qte_demandee, qte_validee, prix_unitaire_ht, montant_ht
+            FROM doc_transferts_lignes
+            WHERE numero_doc = ?
+            ORDER BY id
+        """, (numero_doc,))
+        return c.fetchall()
+    finally:
+        conn.close()
+
+def supprimer_transfert(numero_doc):
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("DELETE FROM doc_transferts_lignes WHERE numero_doc = ?", (numero_doc,))
+        c.execute("DELETE FROM doc_transferts WHERE numero = ?", (numero_doc,))
+        conn.commit()
+        return True, f"Document {numero_doc} supprimé."
+    finally:
+        conn.close()

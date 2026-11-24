@@ -1242,3 +1242,241 @@ def supprimer_inventaire(numero_inv):
         return True, f"Inventaire {numero_inv} supprimé."
     finally:
         conn.close()
+# ==============================================================================
+# MODULE 6 : GESTION & CENTRE DES COÛTS (VOLET ESTIMATIF & VOLET RÉEL INVENTAIRE)
+# ==============================================================================
+
+def calculer_gestion_achats_periode(date_deb, date_fin):
+    """
+    Synthèse des achats ERP saisis sur la période (BR + ED - RF).
+    """
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("""
+            SELECT d.type_doc, d.date_doc, d.numero, COALESCE(f.nom, d.code_fournisseur, 'Interne'),
+                   d.code_dept, l.code_article, l.designation,
+                   COALESCE(sf.libelle, a.sous_famille, 'DIVERS'),
+                   COALESCE(cl.libelle, COALESCE(a.classe, 'DIVERS')),
+                   l.qte, l.montant_ht, l.montant_ttc
+            FROM doc_achats_lignes l
+            JOIN doc_achats d ON l.numero_doc = d.numero
+            LEFT JOIN fournisseurs f ON d.code_fournisseur = f.code
+            LEFT JOIN articles a ON UPPER(l.code_article) = UPPER(a.code)
+            LEFT JOIN sous_familles sf ON UPPER(a.sous_famille) = UPPER(sf.code)
+            LEFT JOIN familles fam ON sf.code_famille = fam.code
+            LEFT JOIN classes cl ON fam.code_classe = cl.code
+            WHERE d.type_doc IN ('BR', 'ED', 'RF')
+              AND d.numero NOT LIKE 'ADJ-%'
+              AND d.date_doc BETWEEN ? AND ?
+            ORDER BY d.date_doc DESC, d.numero DESC
+        """, (str(date_deb), str(date_fin)))
+        return c.fetchall()
+    finally:
+        conn.close()
+
+def calculer_couts_estimatifs(date_deb, date_fin, code_dept_filtre=None):
+    """
+    Volet 1 (Estimatif) : Basé sur les Bons de Transfert validés (BT) vers les départements
+    consommateurs + les Sorties Directes (SD hors ajustements d'inventaire).
+    """
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        # 1. Transferts validés reçus par les départements (hors retours vers ECO)
+        sql_bt = """
+            SELECT d.dept_dest, l.code_article, l.designation, l.unite,
+                   COALESCE(a.sous_famille, 'DIVERS'), COALESCE(sf.libelle, a.sous_famille, 'DIVERS'),
+                   COALESCE(cl.code, COALESCE(a.classe, 'DIVERS')), COALESCE(cl.libelle, COALESCE(a.classe, 'DIVERS')),
+                   l.qte_validee, l.montant_ht
+            FROM doc_transferts_lignes l
+            JOIN doc_transferts d ON l.numero_doc = d.numero
+            LEFT JOIN articles a ON UPPER(l.code_article) = UPPER(a.code)
+            LEFT JOIN sous_familles sf ON UPPER(a.sous_famille) = UPPER(sf.code)
+            LEFT JOIN familles fam ON sf.code_famille = fam.code
+            LEFT JOIN classes cl ON fam.code_classe = cl.code
+            WHERE d.type_doc = 'BT' AND d.statut = 'VALIDÉ'
+              AND UPPER(d.dept_dest) != 'ECO'
+              AND d.date_doc BETWEEN ? AND ?
+        """
+        params_bt = [str(date_deb), str(date_fin)]
+        if code_dept_filtre and code_dept_filtre != "TOUS":
+            sql_bt += " AND UPPER(d.dept_dest) = UPPER(?)"
+            params_bt.append(code_dept_filtre)
+        c.execute(sql_bt, params_bt)
+        rows_bt = c.fetchall()
+
+        # 2. Sorties directes (SD hors ajustements d'inventaire ADJ-S-)
+        sql_sd = """
+            SELECT d.code_dept, l.code_article, l.designation, l.unite,
+                   COALESCE(a.sous_famille, 'DIVERS'), COALESCE(sf.libelle, a.sous_famille, 'DIVERS'),
+                   COALESCE(cl.code, COALESCE(a.classe, 'DIVERS')), COALESCE(cl.libelle, COALESCE(a.classe, 'DIVERS')),
+                   l.qte, l.montant_ht
+            FROM doc_achats_lignes l
+            JOIN doc_achats d ON l.numero_doc = d.numero
+            LEFT JOIN articles a ON UPPER(l.code_article) = UPPER(a.code)
+            LEFT JOIN sous_familles sf ON UPPER(a.sous_famille) = UPPER(sf.code)
+            LEFT JOIN familles fam ON sf.code_famille = fam.code
+            LEFT JOIN classes cl ON fam.code_classe = cl.code
+            WHERE d.type_doc = 'SD'
+              AND d.numero NOT LIKE 'ADJ-%'
+              AND d.date_doc BETWEEN ? AND ?
+        """
+        params_sd = [str(date_deb), str(date_fin)]
+        if code_dept_filtre and code_dept_filtre != "TOUS":
+            sql_sd += " AND UPPER(d.code_dept) = UPPER(?)"
+            params_sd.append(code_dept_filtre)
+        c.execute(sql_sd, params_sd)
+        rows_sd = c.fetchall()
+
+        resultats = []
+        for r in (rows_bt + rows_sd):
+            dp, ca, da, ua, sf_c, sf_l, cl_c, cl_l, qte, mht = r
+            resultats.append({
+                "dept": dp,
+                "code_article": ca,
+                "designation": da,
+                "unite": ua,
+                "sous_famille": f"{sf_c} - {sf_l}" if sf_c != sf_l else sf_c,
+                "classe": f"{cl_c} - {cl_l}" if cl_c != cl_l else cl_c,
+                "qte": float(qte),
+                "cout_ht": float(mht)
+            })
+        return resultats
+    finally:
+        conn.close()
+def lister_inventaires_clotures_dept(code_dept=None):
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        sql = "SELECT numero, date_inv, code_dept, observation FROM inventaires WHERE statut = 'CLÔTURÉ'"
+        params = []
+        if code_dept:
+            sql += " AND UPPER(code_dept) = UPPER(?)"
+            params.append(code_dept)
+        sql += " ORDER BY date_inv ASC, numero ASC"
+        c.execute(sql, params)
+        return c.fetchall()
+    finally:
+        conn.close()
+
+def calculer_couts_reels_inventaire(code_dept, num_inv_debut, num_inv_fin):
+    """
+    Volet 2 (Réel) : Consommation Réelle entre deux inventaires clôturés sur un département :
+    Conso Réelle = Stock Physique (Inv Début) + Entrées reçues (BR + ED + BT entrants) - Sorties (RF + BT sortants) - Stock Physique (Inv Fin).
+    Si num_inv_debut est None (premier inventaire), Stock Initial = 0.
+    """
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("SELECT date_inv FROM inventaires WHERE numero = ?", (num_inv_fin,))
+        res_fin = c.fetchone()
+        if not res_fin:
+            return []
+        date_fin = itemgetter(0)(res_fin)
+
+        stock_init = {}
+        val_init = {}
+        date_deb = "1900-01-01"
+        if num_inv_debut:
+            c.execute("SELECT date_inv FROM inventaires WHERE numero = ?", (num_inv_debut,))
+            res_deb = c.fetchone()
+            if res_deb:
+                date_deb = itemgetter(0)(res_deb)
+            c.execute("SELECT code_article, stock_physique, prix_unitaire_ht FROM inventaires_lignes WHERE numero_inv = ?", (num_inv_debut,))
+            for ca, q_ph, pu in c.fetchall():
+                stock_init[ca] = float(q_ph)
+                val_init[ca] = float(q_ph) * float(pu)
+
+        stock_fin = {}
+        val_fin = {}
+        c.execute("SELECT code_article, stock_physique, prix_unitaire_ht FROM inventaires_lignes WHERE numero_inv = ?", (num_inv_fin,))
+        for ca, q_ph, pu in c.fetchall():
+            stock_fin[ca] = float(q_ph)
+            val_fin[ca] = float(q_ph) * float(pu)
+
+        # Référentiel des articles actifs
+        c.execute("""
+            SELECT a.code, a.designation, COALESCE(a.unite, 'Unité'), COALESCE(a.prix_achat, 0.0),
+                   COALESCE(a.sous_famille, 'DIVERS'), COALESCE(sf.libelle, a.sous_famille, 'DIVERS'),
+                   COALESCE(cl.code, COALESCE(a.classe, 'DIVERS')), COALESCE(cl.libelle, COALESCE(a.classe, 'DIVERS'))
+            FROM articles a
+            LEFT JOIN sous_familles sf ON UPPER(a.sous_famille) = UPPER(sf.code)
+            LEFT JOIN familles fam ON sf.code_famille = fam.code
+            LEFT JOIN classes cl ON fam.code_classe = cl.code
+            WHERE COALESCE(a.actif, 1) = 1
+            ORDER BY a.code
+        """)
+        articles = c.fetchall()
+
+        resultats = []
+        for ca, da, ua, pu_act, sf_c, sf_l, cl_c, cl_l in articles:
+            # Entrées achats (BR, ED hors ADJ-) entre date_deb et date_fin
+            c.execute("""
+                SELECT COALESCE(SUM(l.qte), 0.0), COALESCE(SUM(l.montant_ht), 0.0)
+                FROM doc_achats_lignes l
+                JOIN doc_achats d ON l.numero_doc = d.numero
+                WHERE UPPER(l.code_article) = UPPER(?) AND UPPER(d.code_dept) = UPPER(?)
+                  AND d.type_doc IN ('BR', 'ED') AND d.numero NOT LIKE 'ADJ-%'
+                  AND d.date_doc > ? AND d.date_doc <= ?
+            """, (ca, code_dept, date_deb, date_fin))
+            q_in_a, v_in_a = [float(x) for x in c.fetchone()]
+
+            # Retours fournisseurs (RF)
+            c.execute("""
+                SELECT COALESCE(SUM(l.qte), 0.0), COALESCE(SUM(l.montant_ht), 0.0)
+                FROM doc_achats_lignes l
+                JOIN doc_achats d ON l.numero_doc = d.numero
+                WHERE UPPER(l.code_article) = UPPER(?) AND UPPER(d.code_dept) = UPPER(?)
+                  AND d.type_doc = 'RF'
+                  AND d.date_doc > ? AND d.date_doc <= ?
+            """, (ca, code_dept, date_deb, date_fin))
+            q_rf, v_rf = [float(x) for x in c.fetchone()]
+
+            # Transferts reçus (BT)
+            c.execute("""
+                SELECT COALESCE(SUM(l.qte_validee), 0.0), COALESCE(SUM(l.montant_ht), 0.0)
+                FROM doc_transferts_lignes l
+                JOIN doc_transferts d ON l.numero_doc = d.numero
+                WHERE UPPER(l.code_article) = UPPER(?) AND UPPER(d.dept_dest) = UPPER(?)
+                  AND d.type_doc = 'BT' AND d.statut = 'VALIDÉ'
+                  AND d.date_doc > ? AND d.date_doc <= ?
+            """, (ca, code_dept, date_deb, date_fin))
+            q_in_t, v_in_t = [float(x) for x in c.fetchone()]
+
+            # Transferts sortants (BT)
+            c.execute("""
+                SELECT COALESCE(SUM(l.qte_validee), 0.0), COALESCE(SUM(l.montant_ht), 0.0)
+                FROM doc_transferts_lignes l
+                JOIN doc_transferts d ON l.numero_doc = d.numero
+                WHERE UPPER(l.code_article) = UPPER(?) AND UPPER(d.dept_source) = UPPER(?)
+                  AND d.type_doc = 'BT' AND d.statut = 'VALIDÉ'
+                  AND d.date_doc > ? AND d.date_doc <= ?
+            """, (ca, code_dept, date_deb, date_fin))
+            q_out_t, v_out_t = [float(x) for x in c.fetchone()]
+
+            si_q = stock_init.get(ca, 0.0)
+            sf_q = stock_fin.get(ca, 0.0)
+            conso_qte = round(si_q + q_in_a - q_rf + q_in_t - q_out_t - sf_q, 3)
+
+            si_v = val_init.get(ca, 0.0)
+            sf_v = val_fin.get(ca, 0.0)
+            conso_val = round(si_v + v_in_a - v_rf + v_in_t - v_out_t - sf_v, 3)
+
+            if conso_qte != 0 or conso_val != 0 or si_q != 0 or sf_q != 0:
+                resultats.append({
+                    "dept": code_dept,
+                    "code_article": ca,
+                    "designation": da,
+                    "unite": ua,
+                    "sous_famille": f"{sf_c} - {sf_l}" if sf_c != sf_l else sf_c,
+                    "classe": f"{cl_c} - {cl_l}" if cl_c != cl_l else cl_c,
+                    "stock_init": si_q,
+                    "entrees_nettes": round(q_in_a - q_rf + q_in_t - q_out_t, 3),
+                    "stock_fin": sf_q,
+                    "qte": conso_qte,
+                    "cout_ht": conso_val
+                })
+        return resultats
+    finally:
+        conn.close()

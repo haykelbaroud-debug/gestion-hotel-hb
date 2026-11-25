@@ -154,7 +154,7 @@ class _TursoConnWrapper:
 
     def close(self):
         self._conn.close()
-ddef pousser_toute_la_base_vers_turso():
+def pousser_toute_la_base_vers_turso():
     """Envoie l'intégralité de la base locale vers Turso Cloud par lots rapides."""
     import math
     import urllib.error

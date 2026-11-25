@@ -789,7 +789,7 @@ elif menu == "🗂️ Base de données":
                 st.dataframe(df_fn, use_container_width=True, hide_index=True)
             else:
                 st.info("Aucun fournisseur enregistré.")
-                            st.divider()
+            st.divider()
             st.markdown("#### 📥 Importer la Base Fournisseurs (Excel .xlsx)")
             st.caption("Colonnes attendues : Code Fournisseur, Nom, Famille, Identifiant 1 (MF), Conventionné, Adresse.")
             fichier_fn = st.file_uploader("Choisir le fichier Excel des fournisseurs (.xlsx) :", type=["xlsx", "xlsm"], key="up_base_fourn")

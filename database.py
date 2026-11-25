@@ -1786,10 +1786,9 @@ def restaurer_base_depuis_octets(contenu_bytes):
             return False, "Le fichier sélectionné n'est pas une base SQLite valide ou est corrompu."
 
         # Copie sécurisée vers la base active
-        conn_active = get_connection()
+                # Copie sécurisée vers la base active
+        conn_active = sqlite3.connect(DB_NAME, timeout=30)
         conn_test.backup(conn_active)
-        conn_active.close()
-        conn_test.close()
         conn_active.close()
         conn_test.close()
         pousser_toute_la_base_vers_turso()

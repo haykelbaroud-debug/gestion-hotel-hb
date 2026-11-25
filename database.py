@@ -1790,7 +1790,7 @@ def restaurer_base_depuis_octets(contenu_bytes):
         conn_test.backup(conn_active)
         conn_active.close()
         conn_test.close()
-                conn_active.close()
+        conn_active.close()
         conn_test.close()
         pousser_toute_la_base_vers_turso()
         return True, "Base de données restaurée avec succès ! Toutes vos données ont été récupérées."

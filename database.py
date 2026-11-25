@@ -2152,3 +2152,82 @@ def importer_fournisseurs_excel(chemin_excel, ecraser_existants=False):
     finally:
         wb.close()
         conn.close()
+# ==============================================================================
+# INITIALISATION DES 30 DÉPARTEMENTS OFFICIELS DE L'HÔTEL
+# ==============================================================================
+
+def charger_departements_officiels():
+    """
+    Enregistre et active les 30 départements officiels (01 à 30) avec leur nature
+    et leur suffixe comptable, sans supprimer d'éventuels codes existants.
+    """
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        for col_sql in [
+            "ALTER TABLE departements ADD COLUMN nature TEXT DEFAULT 'Points de ventes ordinaires'",
+            "ALTER TABLE departements ADD COLUMN suffixe_comptable TEXT DEFAULT ''"
+        ]:
+            try:
+                c.execute(col_sql)
+            except Exception:
+                pass
+
+        depts_off = [
+            ("01", "ECONOMAT", "Dépôts Principal", "32", 1),
+            ("02", "CUISINE CENTRALE", "Cuisines", "08", 0),
+            ("03", "MAGASIN TECHNIQUE", "Dépôts Principal", "40", 1),
+            ("04", "CUISINE PERSONNEL", "Cuisines", "08", 0),
+            ("05", "BOUCHERIE", "Cuisines", "08", 0),
+            ("06", "CAFETERIE", "Cuisines", "08", 0),
+            ("07", "CUISINE BEACH SNACK", "Cuisines", "06", 0),
+            ("08", "SCE RESTAURATION", "Points de ventes ordinaires", "04", 0),
+            ("09", "CAVE DU JOUR", "Points de ventes ordinaires", "06", 0),
+            ("10", "LOBBY BAR", "Points de ventes ordinaires", "04", 0),
+            ("11", "PATISSERIE", "Cuisines", "08", 0),
+            ("12", "POOL BAR", "Points de ventes ordinaires", "04", 0),
+            ("13", "CAVE BEACH SNACK", "Points de ventes ordinaires", "06", 0),
+            ("14", "BEACH BAR", "Points de ventes ordinaires", "08", 0),
+            ("15", "BAR EXTRA", "Points de ventes ordinaires", "04", 0),
+            ("16", "CAFE MAURE", "Points de ventes ordinaires", "08", 0),
+            ("17", "ETAGE", "Points de ventes ordinaires", "02", 0),
+            ("18", "BUANDERIE", "Points de ventes ordinaires", "06", 0),
+            ("19", "PME RESTAURANT BARS", "Points de ventes ordinaires", "32", 0),
+            ("20", "PMC CUISINE", "Points de ventes ordinaires", "32", 0),
+            ("21", "MAINTENANCE", "Points de ventes ordinaires", "40", 0),
+            ("22", "LOCAL PISCINE", "Points de ventes ordinaires", "40", 0),
+            ("23", "STIWARDING", "Points de ventes ordinaires", "09", 0),
+            ("24", "FRONT OFFICE", "Points de ventes ordinaires", "01", 0),
+            ("25", "ANIMATION", "Points de ventes ordinaires", "27", 0),
+            ("26", "SERVICE HYGIÈNE", "Points de ventes ordinaires", "32", 0),
+            ("27", "AQUA PARK", "Points de ventes ordinaires", "32", 0),
+            ("28", "SERVICE PERSONNEL", "Points de ventes ordinaires", "32", 0),
+            ("29", "SERVICE FINANCIER", "Points de ventes ordinaires", "32", 0),
+            ("30", "CASSES & AVARIÉS (DLC)", "Dépôts de stockage uniquement", "32", 0)
+        ]
+
+        # Désactive l'ancien code provisoire ECO s'il n'a aucun mouvement, pour éviter le doublon avec 01 - ECONOMAT
+        c.execute("SELECT COUNT(*) FROM doc_achats WHERE code_dept = 'ECO'")
+        nb_a = itemgetter(0)(c.fetchone())
+        c.execute("SELECT COUNT(*) FROM doc_transferts WHERE dept_source = 'ECO' OR dept_dest = 'ECO'")
+        nb_t = itemgetter(0)(c.fetchone())
+        if nb_a == 0 and nb_t == 0:
+            c.execute("DELETE FROM departements WHERE code_court = 'ECO'")
+
+        for code_d, nom_d, nat_d, suf_d, auth_achat in depts_off:
+            c.execute("""
+                INSERT INTO departements (code_court, nom_long, actif, autorise_achat, nature, suffixe_comptable)
+                VALUES (?, ?, 1, ?, ?, ?)
+                ON CONFLICT(code_court) DO UPDATE SET
+                    nom_long = excluded.nom_long,
+                    actif = 1,
+                    nature = excluded.nature,
+                    suffixe_comptable = excluded.suffixe_comptable
+            """, (code_d, nom_d, auth_achat, nat_d, suf_d))
+
+        conn.commit()
+        return True, "Les 30 départements officiels (01 à 30) ont été chargés et activés avec succès !"
+    except Exception as e:
+        return False, f"Erreur : {e}"
+    finally:
+        conn.close()

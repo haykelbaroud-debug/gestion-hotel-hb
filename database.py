@@ -50,8 +50,73 @@ def nettoyer_nombre(val):
     except ValueError:
         return 0.0
 
+import os
+import sqlite3
+import openpyxl
+from operator import itemgetter
+
+try:
+    import streamlit as st
+except Exception:
+    st = None
+
+try:
+    import libsql_experimental as libsql
+except Exception:
+    libsql = None
+
+DB_PATH = "hotel_erp_pro.db"
+
+def _get_turso_secrets():
+    url, token = "", ""
+    if st is not None:
+        try:
+            url = st.secrets.get("TURSO_DATABASE_URL", "")
+            token = st.secrets.get("TURSO_AUTH_TOKEN", "")
+        except Exception:
+            pass
+    if not url:
+        url = os.environ.get("TURSO_DATABASE_URL", "")
+        token = os.environ.get("TURSO_AUTH_TOKEN", "")
+    return url, token
+
+class _TursoConnWrapper:
+    """Enveloppe transparente pour synchroniser automatiquement avec Turso à chaque commit()."""
+    def __init__(self, conn):
+        self._conn = conn
+
+    def cursor(self):
+        return self._conn.cursor()
+
+    def execute(self, *args, **kwargs):
+        return self._conn.execute(*args, **kwargs)
+
+    def commit(self):
+        self._conn.commit()
+        try:
+            self._conn.sync()
+        except Exception:
+            pass
+
+    def close(self):
+        try:
+            self._conn.close()
+        except Exception:
+            pass
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
 def get_connection():
-    return sqlite3.connect(DB_NAME, timeout=30, check_same_thread=False)
+    url, token = _get_turso_secrets()
+    if libsql is not None and url and token:
+        conn = libsql.connect(DB_PATH, sync_url=url, auth_token=token)
+        try:
+            conn.sync()
+        except Exception:
+            pass
+        return _TursoConnWrapper(conn)
+    return sqlite3.connect(DB_PATH)
 
 def initialiser_base():
     conn = get_connection()

@@ -154,6 +154,114 @@ class _TursoConnWrapper:
 
     def close(self):
         self._conn.close()
+def pousser_toute_la_base_vers_turso():
+    """Envoie l'intégralité de la base locale vers Turso Cloud par lots rapides."""
+    url, token = _get_turso_secrets()
+    if not url or not token:
+        return
+    local_conn = sqlite3.connect(DB_NAME, timeout=30)
+    try:
+        c = local_conn.cursor()
+        c.execute("SELECT name, sql FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+        tables = c.fetchall()
+
+        for tbl_name, tbl_sql in tables:
+            reqs = [
+                {"type": "execute", "stmt": {"sql": f"DROP TABLE IF EXISTS {tbl_name}"}},
+                {"type": "execute", "stmt": {"sql": tbl_sql}}
+            ]
+            c.execute(f"SELECT * FROM {tbl_name}")
+            rows = c.fetchall()
+            if rows:
+                nb_cols = len(rows.pop(0)) if False else len(c.description)
+                placeholders = ",".join(["?"] * nb_cols)
+                sql_ins = f"INSERT INTO {tbl_name} VALUES ({placeholders})"
+                for r in rows:
+                    args = []
+                    for val in r:
+                        if val is None:
+                            args.append({"type": "null"})
+                        elif isinstance(val, int):
+                            args.append({"type": "integer", "value": str(val)})
+                        elif isinstance(val, float):
+                            args.append({"type": "float", "value": val})
+                        else:
+                            args.append({"type": "text", "value": str(val)})
+                    reqs.append({"type": "execute", "stmt": {"sql": sql_ins, "args": args}})
+                    # Envoi par paquets de 400 lignes pour aller très vite
+                    if len(reqs) >= 400:
+                        reqs.append({"type": "close"})
+                        req = urllib.request.Request(
+                            f"{url}/v2/pipeline",
+                            data=json.dumps({"requests": reqs}).encode("utf-8"),
+                            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                            method="POST"
+                        )
+                        with urllib.request.urlopen(req, timeout=30) as resp:
+                            resp.read()
+                        reqs = []
+
+            if reqs:
+                reqs.append({"type": "close"})
+                req = urllib.request.Request(
+                    f"{url}/v2/pipeline",
+                    data=json.dumps({"requests": reqs}).encode("utf-8"),
+                    headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                    method="POST"
+                )
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    resp.read()
+    finally:
+        local_conn.close()
+
+def synchroniser_depuis_turso():
+    """Télécharge toutes les tables depuis Turso si la base locale est vide après un redémarrage Streamlit."""
+    url, token = _get_turso_secrets()
+    if not url or not token:
+        return
+    local_conn = sqlite3.connect(DB_NAME, timeout=30)
+    try:
+        c_loc = local_conn.cursor()
+        try:
+            c_loc.execute("SELECT COUNT(*) FROM articles")
+            if itemgetter(0)(c_loc.fetchone()) > 0:
+                return
+        except Exception:
+            pass
+
+        reqs = [{"type": "execute", "stmt": {"sql": "SELECT name, sql FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"}}, {"type": "close"}]
+        req = urllib.request.Request(
+            f"{url}/v2/pipeline",
+            data=json.dumps({"requests": reqs}).encode("utf-8"),
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            method="POST"
+        )
+        with urllib.request.urlopen(req, timeout=25) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+
+        rows_tbl = data["results"]["response"]["result"]["rows"]
+        for r in rows_tbl:
+            tbl_name = r["value"]
+            tbl_sql = r["value"]
+            c_loc.execute(tbl_sql.replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS "))
+            req_data = urllib.request.Request(
+                f"{url}/v2/pipeline",
+                data=json.dumps({"requests": [{"type": "execute", "stmt": {"sql": f"SELECT * FROM {tbl_name}"}}, {"type": "close"}]}).encode("utf-8"),
+                headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                method="POST"
+            )
+            with urllib.request.urlopen(req_data, timeout=30) as r_d:
+                res_d = json.loads(r_d.read().decode("utf-8"))["results"]["response"]["result"]
+            cols = [col["name"] for col in res_d["cols"]]
+            if cols and res_d["rows"]:
+                placeholders = ",".join(["?"] * len(cols))
+                vals_list = [[None if cell["type"] == "null" else cell.get("value") for cell in row] for row in res_d["rows"]]
+                c_loc.executemany(f"INSERT OR REPLACE INTO {tbl_name} ({','.join(cols)}) VALUES ({placeholders})", vals_list)
+        local_conn.commit()
+    except Exception:
+        pass
+    finally:
+        local_conn.close()
 
 def get_connection():
     local_conn = sqlite3.connect(DB_NAME, timeout=30, check_same_thread=False)
@@ -162,9 +270,10 @@ def get_connection():
         return _TursoConnWrapper(local_conn, url, token)
     return local_conn
 
-
 def initialiser_base():
+    synchroniser_depuis_turso()
     conn = get_connection()
+
     try:
         c = conn.cursor()
         c.execute("""CREATE TABLE IF NOT EXISTS articles (
@@ -1681,6 +1790,9 @@ def restaurer_base_depuis_octets(contenu_bytes):
         conn_test.backup(conn_active)
         conn_active.close()
         conn_test.close()
+                conn_active.close()
+        conn_test.close()
+        pousser_toute_la_base_vers_turso()
         return True, "Base de données restaurée avec succès ! Toutes vos données ont été récupérées."
     except Exception as e:
         return False, f"Erreur lors de la restauration : {e}"

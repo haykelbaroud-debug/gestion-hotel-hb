@@ -154,16 +154,35 @@ class _TursoConnWrapper:
 
     def close(self):
         self._conn.close()
-def pousser_toute_la_base_vers_turso():
+ddef pousser_toute_la_base_vers_turso():
     """Envoie l'intégralité de la base locale vers Turso Cloud par lots rapides."""
+    import math
+    import urllib.error
     url, token = _get_turso_secrets()
     if not url or not token:
         return
     local_conn = sqlite3.connect(DB_NAME, timeout=30)
     try:
         c = local_conn.cursor()
-        c.execute("SELECT name, sql FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
-        tables = [(n, s) for (n, s) in c.fetchall() if n != "sqlite_sequence" and s]
+        c.execute("SELECT name, sql FROM sqlite_master WHERE type='table'")
+        tables = [(n, s) for (n, s) in c.fetchall() if not n.startswith("sqlite_") and s]
+
+        def _envoyer_batch(reqs_list):
+            if not reqs_list:
+                return
+            reqs_list.append({"type": "close"})
+            req = urllib.request.Request(
+                f"{url}/v2/pipeline",
+                data=json.dumps({"requests": reqs_list}).encode("utf-8"),
+                headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                method="POST"
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    resp.read()
+            except urllib.error.HTTPError as he:
+                err_body = he.read().decode("utf-8", errors="ignore")
+                raise RuntimeError(f"Turso HTTP {he.code}: {err_body}")
 
         for tbl_name, tbl_sql in tables:
             reqs = [
@@ -173,7 +192,7 @@ def pousser_toute_la_base_vers_turso():
             c.execute(f"SELECT * FROM {tbl_name}")
             rows = c.fetchall()
             if rows:
-                nb_cols = len(rows.pop(0)) if False else len(c.description)
+                nb_cols = len(c.description)
                 placeholders = ",".join(["?"] * nb_cols)
                 sql_ins = f"INSERT INTO {tbl_name} VALUES ({placeholders})"
                 for r in rows:
@@ -181,36 +200,22 @@ def pousser_toute_la_base_vers_turso():
                     for val in r:
                         if val is None:
                             args.append({"type": "null"})
+                        elif isinstance(val, bool):
+                            args.append({"type": "integer", "value": "1" if val else "0"})
                         elif isinstance(val, int):
                             args.append({"type": "integer", "value": str(val)})
                         elif isinstance(val, float):
-                            args.append({"type": "float", "value": val})
+                            if math.isnan(val) or math.isinf(val):
+                                args.append({"type": "float", "value": 0.0})
+                            else:
+                                args.append({"type": "float", "value": val})
                         else:
                             args.append({"type": "text", "value": str(val)})
                     reqs.append({"type": "execute", "stmt": {"sql": sql_ins, "args": args}})
-                    # Envoi par paquets de 400 lignes pour aller très vite
-                    if len(reqs) >= 400:
-                        reqs.append({"type": "close"})
-                        req = urllib.request.Request(
-                            f"{url}/v2/pipeline",
-                            data=json.dumps({"requests": reqs}).encode("utf-8"),
-                            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-                            method="POST"
-                        )
-                        with urllib.request.urlopen(req, timeout=30) as resp:
-                            resp.read()
+                    if len(reqs) >= 350:
+                        _envoyer_batch(reqs)
                         reqs = []
-
-            if reqs:
-                reqs.append({"type": "close"})
-                req = urllib.request.Request(
-                    f"{url}/v2/pipeline",
-                    data=json.dumps({"requests": reqs}).encode("utf-8"),
-                    headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-                    method="POST"
-                )
-                with urllib.request.urlopen(req, timeout=30) as resp:
-                    resp.read()
+            _envoyer_batch(reqs)
     finally:
         local_conn.close()
 

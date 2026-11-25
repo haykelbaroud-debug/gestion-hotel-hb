@@ -163,7 +163,7 @@ def pousser_toute_la_base_vers_turso():
     try:
         c = local_conn.cursor()
         c.execute("SELECT name, sql FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
-        tables = c.fetchall()
+        tables = [(n, s) for (n, s) in c.fetchall() if n != "sqlite_sequence" and s]
 
         for tbl_name, tbl_sql in tables:
             reqs = [

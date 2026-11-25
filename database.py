@@ -1842,3 +1842,43 @@ def importer_base_articles_excel(chemin_excel, ecraser_existants=False):
     finally:
         wb.close()
         conn.close()
+# ==============================================================================
+# NETTOYAGE & FUSION DES DOUBLONS DE CLASSES (EX: 02 ET 22 -> 02 ALIMENTATION)
+# ==============================================================================
+
+def fusionner_doublons_classes():
+    """
+    Regroupe les classes ayant exactement le même libellé, conserve le code officiel
+    (priorité aux codes 01..14 ou au plus petit code), réaffecte les familles et articles,
+    et supprime les doublons (22, 33, 44, etc.).
+    """
+    conn = get_connection()
+    nb_suppr = 0
+    try:
+        c = conn.cursor()
+        c.execute("SELECT code, UPPER(TRIM(libelle)) FROM classes ORDER BY LENGTH(code) ASC, code ASC")
+        rows = c.fetchall()
+
+        lib_vers_principal = {}
+        doublons = []  # liste de (ancien_code, code_principal)
+
+        for code_c, lib_c in rows:
+            if lib_c not in lib_vers_principal:
+                lib_vers_principal[lib_c] = code_c
+            else:
+                code_maitre = lib_vers_principal[lib_c]
+                if code_c != code_maitre:
+                    doublons.append((code_c, code_maitre))
+
+        for ancien_code, code_maitre in doublons:
+            c.execute("UPDATE familles SET code_classe = ? WHERE code_classe = ?", (code_maitre, ancien_code))
+            c.execute("UPDATE articles SET classe = ? WHERE classe = ?", (code_maitre, ancien_code))
+            c.execute("DELETE FROM classes WHERE code = ?", (ancien_code,))
+            nb_suppr += 1
+
+        conn.commit()
+        return True, f"Nettoyage terminé : {nb_suppr} classe(s) en double fusionnée(s) et supprimée(s)."
+    except Exception as e:
+        return False, f"Erreur lors de la fusion : {e}"
+    finally:
+        conn.close()

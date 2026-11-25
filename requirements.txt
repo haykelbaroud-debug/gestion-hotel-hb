@@ -3,4 +3,6 @@ openpyxl
 reportlab
 plotly
 psycopg2-binary
-libsql-experimental
+libsql-client
+requests
+

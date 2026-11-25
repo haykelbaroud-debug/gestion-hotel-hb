@@ -2074,3 +2074,81 @@ def reconstruire_nomenclature_officielle():
         return False, f"Erreur lors de la reconstruction : {e}"
     finally:
         conn.close()
+# ==============================================================================
+# IMPORTATION AUTOMATIQUE DE LA BASE FOURNISSEURS EXCEL (1000+ FOURNISSEURS)
+# ==============================================================================
+
+def importer_fournisseurs_excel(chemin_excel, ecraser_existants=False):
+    """
+    Lit un fichier Excel de fournisseurs (entêtes ligne 1, données à partir ligne 2) :
+    Col A (0): Code Fournisseur (conserve les zéros initiaux ex: 00000182)
+    Col B (1): Nom
+    Col C (2): Famille
+    Col D (3): Identifiant 1 (Matricule Fiscal)
+    Col E (4): Conventionné (true/false ou Oui/Non)
+    Col F (5): Adresse
+    """
+    wb = openpyxl.load_workbook(chemin_excel, data_only=True, read_only=True)
+    ws = wb.active
+    conn = get_connection()
+    nb_ajoutes, nb_maj = 0, 0
+    try:
+        c = conn.cursor()
+        # Ajout doux des nouvelles colonnes si elles n'existent pas encore
+        for col_sql in [
+            "ALTER TABLE fournisseurs ADD COLUMN famille TEXT DEFAULT ''",
+            "ALTER TABLE fournisseurs ADD COLUMN conventionne TEXT DEFAULT 'Non'",
+            "ALTER TABLE fournisseurs ADD COLUMN adresse TEXT DEFAULT ''"
+        ]:
+            try:
+                c.execute(col_sql)
+            except Exception:
+                pass
+
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            raw_code = get_col(row, 0)
+            raw_nom = get_col(row, 1)
+            if raw_code is None or raw_nom is None:
+                continue
+
+            code_f = str(raw_code).strip()
+            if code_f.endswith(".0"):
+                code_f = code_f[:-2]
+            nom_f = str(raw_nom).strip()
+
+            if code_f == "" or nom_f == "" or code_f.upper() == "CODE FOURNISSEUR":
+                continue
+
+            fam_f = str(get_col(row, 2) or "").strip()
+            mf_f = str(get_col(row, 3) or "").strip()
+            raw_conv = str(get_col(row, 4) or "").strip().lower()
+            conv_f = "Oui" if raw_conv in ("true", "1", "oui", "vrai") else "Non"
+            adr_f = str(get_col(row, 5) or "").strip()
+
+            if ecraser_existants:
+                c.execute("SELECT 1 FROM fournisseurs WHERE code = ?", (code_f,))
+                existe = c.fetchone() is not None
+                c.execute("""INSERT OR REPLACE INTO fournisseurs
+                    (code, nom, telephone, matricule_fiscal, email, actif, famille, conventionne, adresse)
+                    VALUES (?, ?, COALESCE((SELECT telephone FROM fournisseurs WHERE code = ?), ''), ?,
+                            COALESCE((SELECT email FROM fournisseurs WHERE code = ?), ''), 1, ?, ?, ?)""",
+                    (code_f, nom_f, code_f, mf_f, code_f, fam_f, conv_f, adr_f))
+                if existe:
+                    nb_maj += 1
+                else:
+                    nb_ajoutes += 1
+            else:
+                c.execute("""INSERT OR IGNORE INTO fournisseurs
+                    (code, nom, telephone, matricule_fiscal, email, actif, famille, conventionne, adresse)
+                    VALUES (?, ?, '', ?, '', 1, ?, ?, ?)""",
+                    (code_f, nom_f, mf_f, fam_f, conv_f, adr_f))
+                if c.rowcount > 0:
+                    nb_ajoutes += 1
+
+        conn.commit()
+        return True, (nb_ajoutes, nb_maj)
+    except Exception as e:
+        return False, str(e)
+    finally:
+        wb.close()
+        conn.close()

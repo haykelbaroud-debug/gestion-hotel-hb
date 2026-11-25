@@ -1914,3 +1914,163 @@ def fusionner_doublons_classes():
         return False, f"Erreur lors de la fusion : {e}"
     finally:
         conn.close()
+# ==============================================================================
+# RECONSTRUCTION COMPLÈTE DU RÉFÉRENTIEL OFFICIEL (CLASSES, FAMILLES, SOUS-FAMILLES)
+# ==============================================================================
+
+def reconstruire_nomenclature_officielle():
+    """
+    Remplace proprement les tables classes, familles et sous_familles par la nomenclature
+    officielle complète de l'hôtel (14 classes, 38 familles, 100+ sous-familles) et
+    réaligne tous les articles existants sans les supprimer.
+    """
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+
+        # 1. Réinitialisation propre des tables de nomenclature uniquement (les articles et mouvements sont conservés)
+        c.execute("DELETE FROM sous_familles")
+        c.execute("DELETE FROM familles")
+        c.execute("DELETE FROM classes")
+
+        classes_off = [
+            ("01", "BOISSONS"),
+            ("02", "ALIMENTATION"),
+            ("03", "FRTS BUREAUX"),
+            ("04", "HYGIENE"),
+            ("05", "FRTS CLIENTS"),
+            ("06", "PME & PMC"),
+            ("07", "MAINTENANCE"),
+            ("08", "LINGE & UNIFORME"),
+            ("09", "EMBALLAGE"),
+            ("10", "PRODUITS PISCINES & SEL"),
+            ("11", "EXTRA ARTICLES"),
+            ("12", "ANIMATION ARTICLES"),
+            ("13", "THALASSO"),
+            ("14", "ACHATS DIVERS")
+        ]
+        for cl_c, cl_l in classes_off:
+            c.execute("INSERT INTO classes (code, libelle, actif) VALUES (?, ?, 1)", (cl_c, cl_l))
+
+        familles_off = [
+            ("0101", "BOISSONS NON ALCOOLIS", "01"),
+            ("0102", "BOISSONS ALCOOLISEES", "01"),
+            ("0103", "LIQUEUR", "01"),
+            ("0201", "VIAN,POISSO,POUL,CHAR", "02"),
+            ("0202", "AUTRES NOURRITURES", "02"),
+            ("0203", "PATISSERIE", "02"),
+            ("0204", "LEG & FRUITS", "02"),
+            ("0205", "FARINE", "02"),
+            ("0206", "GRAISSE ET HUILE", "02"),
+            ("0207", "EPICES", "02"),
+            ("0301", "FRTS DES BUREAUX", "03"),
+            ("0401", "MATERIELS D'HYG & NET", "04"),
+            ("0402", "PRODUITS D'HYG & NET", "04"),
+            ("0403", "PRODUITS BUANDERIE", "04"),
+            ("0501", "FRTS GUESTS", "05"),
+            ("0601", "PME", "06"),
+            ("0602", "PMC", "06"),
+            ("0701", "BUILDING & CONSTRUCT", "07"),
+            ("0702", "ENGINEERING", "07"),
+            ("0703", "HOTEL INVENTORY", "07"),
+            ("0704", "JARDIN", "07"),
+            ("0705", "MAIN ANIMAT MAT", "07"),
+            ("0706", "SWIMMING POOL", "07"),
+            ("0801", "LINGE", "08"),
+            ("0802", "UNIFORME", "08"),
+            ("0901", "EMBALLAGE", "09"),
+            ("1001", "PRODUITS PISCINES", "10"),
+            ("1002", "SEL INDUSTRIEL", "10"),
+            ("1101", "EXTRA BOISSONS", "11"),
+            ("1102", "EXTRA CHICHA", "11"),
+            ("1103", "EXTRA NOURRITURES", "11"),
+            ("1104", "MAGIC SCHOP ARTICLES", "11"),
+            ("1201", "ANIMATION ARTICLES", "12"),
+            ("1301", "BOUTIQUE THALASSO", "13"),
+            ("1302", "CABINE THALASSO", "13"),
+            ("1303", "HYGIENNE THALASSO", "13"),
+            ("1401", "ACHATS DIVERS", "14")
+        ]
+        for fam_c, fam_l, cl_c in familles_off:
+            c.execute("INSERT INTO familles (code, libelle, code_classe, actif) VALUES (?, ?, ?, 1)", (fam_c, fam_l, cl_c))
+        sous_familles_off = [
+            # 01 BOISSONS
+            ("WATR", "WATR", "0101"), ("SOFT", "SOFT", "0101"),
+            ("BEER", "BEER", "0102"), ("WHIW", "WHIW", "0102"), ("ROSW", "ROSW", "0102"), ("REDW", "REDW", "0102"),
+            ("SPAW", "SPAW", "0103"), ("INTS", "INTS", "0103"), ("NATS", "NATS", "0103"),
+            # 02 ALIMENTATION
+            ("MEAT", "MEAT", "0201"), ("FISH", "FISH", "0201"), ("POUL", "POUL", "0201"), ("SAUS", "SAUS", "0201"),
+            ("DAIR", "DAIR", "0202"), ("EGGS", "EGGS", "0202"), ("THEC", "THEC", "0202"), ("MIXP", "MIXP", "0202"),
+            ("BRKF", "BRKF", "0203"), ("PATI", "PATI", "0203"), ("ICEC", "ICEC", "0203"),
+            ("VFRE", "VFRE", "0204"), ("VFRO", "VFRO", "0204"), ("VCAN", "VCAN", "0204"),
+            ("FFRE", "FFRE", "0204"), ("ORAN", "ORAN", "0204"), ("FFRO", "FFRO", "0204"), ("FCAN", "FCAN", "0204"), ("DRYP", "DRYP", "0204"),
+            ("PAST", "PAST", "0205"), ("BRED", "BRED", "0205"),
+            ("OILF", "OILF", "0206"),
+            ("SAUC", "SAUC", "0207"),
+            # 03 FRTS BUREAUX
+            ("FRTS BUREAUX", "FRTS BUREAUX", "0301"), ("IMPRIMES", "IMPRIMES", "0301"), ("CARTOUCHES,TON&RUBAN", "CARTOUCHES,TON&RUBAN", "0301"),
+            # 04 HYGIENE
+            ("MATERIELS D'HYG & NE", "MATERIELS D'HYG & NE", "0401"),
+            ("PRODUITS D'HYG & NET", "PRODUITS D'HYG & NET", "0402"),
+            ("PRODUITS BUANDERIE", "PRODUITS BUANDERIE", "0403"),
+            # 05 FRTS CLIENTS
+            ("FRTS GUESTS", "FRTS GUESTS", "0501"),
+            # 06 PME & PMC
+            ("PORCELAINE", "PORCELAINE", "0601"), ("VERRERIE", "VERRERIE", "0601"), ("COUVERTS", "COUVERTS", "0601"),
+            ("INOX &", "INOX &", "0601"), ("POTERIE", "POTERIE", "0601"),
+            ("PMC", "PMC", "0602"), ("MELAMINE PMC", "MELAMINE PMC", "0602"),
+            # 07 MAINTENANCE
+            ("ENT REP AUTRE INSTAL", "ENT REP AUTRE INSTAL", "0701"), ("ENT REP BATIMENTS", "ENT REP BATIMENTS", "0701"), ("ENT REP INST CHAM CL", "ENT REP INST CHAM CL", "0701"),
+            ("ENT REP CH-CLI-VENT", "ENT REP CH-CLI-VENT", "0702"), ("ENT REP ELEC ET MECA", "ENT REP ELEC ET MECA", "0702"),
+            ("ENT REP EQUIP TECH", "ENT REP EQUIP TECH", "0702"), ("ENT REP INSTA BUANDE", "ENT REP INSTA BUANDE", "0702"), ("ENT REP PETIT MATERI", "ENT REP PETIT MATERI", "0702"),
+            ("ENT REP INS REST BAR", "ENT REP INS REST BAR", "0703"), ("ENT REP INSTA CUISIN", "ENT REP INSTA CUISIN", "0703"),
+            ("ENT REP MATE INFORMA", "ENT REP MATE INFORMA", "0703"), ("ENT REP TELEPHONE", "ENT REP TELEPHONE", "0703"), ("ENT REP MAINT TV RA", "ENT REP MAINT TV RA", "0703"),
+            ("ENT REP JARDIN", "ENT REP JARDIN", "0704"),
+            ("ENT REP SPORT NAUTQU", "ENT REP SPORT NAUTQU", "0705"),
+            ("ENT REP PISCINE", "ENT REP PISCINE", "0706"),
+            # 08 LINGE & UNIFORME
+            ("LINGE F&B", "LINGE F&B", "0801"), ("LINGE ETAGE", "LINGE ETAGE", "0801"), ("LINGE THALASSO", "LINGE THALASSO", "0801"),
+            ("UNIFORME REST & BAR", "UNIFORME REST & BAR", "0802"), ("UNIFORME ADMINIST", "UNIFORME ADMINIST", "0802"),
+            ("UNIFORME ANIMATION", "UNIFORME ANIMATION", "0802"), ("UNIFORME CUISINE", "UNIFORME CUISINE", "0802"),
+            ("UNIFORME ETAGE", "UNIFORME ETAGE", "0802"), ("UNIFORME RECEPTION", "UNIFORME RECEPTION", "0802"),
+            ("UNIFORME THALASSO", "UNIFORME THALASSO", "0802"), ("UNIFORME ENTRETIEN", "UNIFORME ENTRETIEN", "0802"), ("UNIFORME SECURITE ET JAI", "UNIFORME SECURITE ET JAI", "0802"),
+            # 09 EMBALLAGE
+            ("EMBALLAGE", "EMBALLAGE", "0901"),
+            # 10 PRODUITS PISCINES & SEL
+            ("PRODUITS PISCINES", "PRODUITS PISCINES", "1001"),
+            ("SEL GROS", "SEL GROS", "1002"),
+            # 11 EXTRA ARTICLES
+            ("EXTRA BIERRES", "EXTRA BIERRES", "1101"), ("EXTRA EAUX", "EXTRA EAUX", "1101"), ("EXTRA LIQUEURS", "EXTRA LIQUEURS", "1101"),
+            ("EXTRA SODATS", "EXTRA SODATS", "1101"), ("EXTRA VINS", "EXTRA VINS", "1101"),
+            ("EXTRA CHICHAS", "EXTRA CHICHAS", "1102"),
+            ("EXTRA CAFE & THE & AUTRI", "EXTRA CAFE & THE & AUTRI", "1103"), ("EXTRA GLACES", "EXTRA GLACES", "1103"), ("EXTRA ORANGES", "EXTRA ORANGES", "1103"),
+            ("VETEMENTS &", "VETEMENTS &", "1104"),
+            # 12 ANIMATION ARTICLES
+            ("ANIMATION ARTICLES", "ANIMATION ARTICLES", "1201"),
+            # 13 THALASSO
+            ("GUESTS THALASSO", "GUESTS THALASSO", "1301"), ("BOUTIQUE THALASSO", "BOUTIQUE THALASSO", "1301"),
+            ("CABINE THALASSO", "CABINE THALASSO", "1302"),
+            ("HYGIENNE THALASSO", "HYGIENNE THALASSO", "1303"),
+            # 14 ACHATS DIVERS
+            ("ACHATS DIVERS", "ACHATS DIVERS", "1401")
+        ]
+        for sf_c, sf_l, fam_c in sous_familles_off:
+            c.execute("INSERT OR IGNORE INTO sous_familles (code, libelle, code_famille, actif) VALUES (?, ?, ?, 1)", (sf_c, sf_l, fam_c))
+
+        # Réaligner la colonne 'classe' des articles existants selon leur sous-famille officielle
+        c.execute("""
+            UPDATE articles
+            SET classe = COALESCE((
+                SELECT f.code_classe
+                FROM sous_familles sf
+                JOIN familles f ON sf.code_famille = f.code
+                WHERE UPPER(sf.code) = UPPER(articles.sous_famille)
+            ), classe)
+        """)
+
+        conn.commit()
+        return True, f"Nomenclature officielle reconstruite : {len(classes_off)} Classes, {len(familles_off)} Familles et {len(sous_familles_off)} Sous-Familles alignées !"
+    except Exception as e:
+        return False, f"Erreur lors de la reconstruction : {e}"
+    finally:
+        conn.close()

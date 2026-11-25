@@ -13,13 +13,16 @@ st.set_page_config(
     layout="wide"
 )
 
-db.initialiser_base()
-db.initialiser_parametrage()
-db.initialiser_referentiels_m2()
-db.initialiser_achats_m3()
-db.initialiser_transferts_m4()
-db.initialiser_stock_inventaire_m5()
-db.initialiser_nuitees_m7()
+@st.cache_resource
+def _demarrer_base_une_seule_fois():
+    db.initialiser_base()
+    db.initialiser_achats_m3()
+    db.initialiser_transferts_m4()
+    db.initialiser_stock_inventaire_m5()
+    db.initialiser_nuitees_m7()
+    return True
+
+_demarrer_base_une_seule_fois()
 
 def generer_excel_memoire(titre, entetes, lignes):
     import openpyxl

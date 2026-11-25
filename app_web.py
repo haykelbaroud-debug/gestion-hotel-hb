@@ -789,6 +789,26 @@ elif menu == "🗂️ Base de données":
                 st.dataframe(df_fn, use_container_width=True, hide_index=True)
             else:
                 st.info("Aucun fournisseur enregistré.")
+                            st.divider()
+            st.markdown("#### 📥 Importer la Base Fournisseurs (Excel .xlsx)")
+            st.caption("Colonnes attendues : Code Fournisseur, Nom, Famille, Identifiant 1 (MF), Conventionné, Adresse.")
+            fichier_fn = st.file_uploader("Choisir le fichier Excel des fournisseurs (.xlsx) :", type=["xlsx", "xlsm"], key="up_base_fourn")
+            ecraser_fn = st.checkbox("Mettre à jour les fournisseurs existants (même code)", value=False, key="chk_maj_fn")
+            if fichier_fn is not None:
+                if st.button("🚀 Injecter les Fournisseurs", type="primary", key="btn_imp_fn"):
+                    with st.spinner("Importation des fournisseurs en cours..."):
+                        suf_fn = os.path.splitext(fichier_fn.name)[1]
+                        with tempfile.NamedTemporaryFile(delete=False, suffix=suf_fn) as tmp_fn:
+                            tmp_fn.write(fichier_fn.getvalue())
+                            path_fn = tmp_fn.name
+                        ok_fn, res_fn = db.importer_fournisseurs_excel(path_fn, ecraser_existants=ecraser_fn)
+                        os.remove(path_fn)
+                        if ok_fn:
+                            aj, mj = res_fn
+                            st.success(f"Importation terminée : **{aj}** fournisseur(s) ajouté(s), **{mj}** mis à jour !")
+                            st.rerun()
+                        else:
+                            st.error(f"Erreur : {res_fn}")
 
     # ---------------- ONGLET 3 : DÉPARTEMENTS ----------------
     with btab3:

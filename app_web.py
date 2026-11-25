@@ -869,6 +869,14 @@ elif menu == "🗂️ Base de données":
                 st.dataframe(df_dp, use_container_width=True, hide_index=True)
             else:
                 st.info("Aucun département enregistré.")
+            st.divider()
+            if st.button("🔄 Charger & Activer les 30 Départements Officiels (01 à 30)", type="primary", key="btn_load_depts_off"):
+                ok_dp, msg_dp = db.charger_departements_officiels()
+                if ok_dp:
+                    st.success(msg_dp)
+                    st.rerun()
+                else:
+                    st.error(msg_dp)
                     # ---------------- ONGLET 4 : IMPORT BASE ARTICLES EXCEL ----------------
     with btab4:
         st.subheader("📥 Injection automatique de la Base Articles & Nomenclature")

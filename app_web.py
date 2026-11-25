@@ -464,6 +464,13 @@ elif menu == "⚙️ Paramétrage de base":
                     for r in classes
                 ])
                 st.dataframe(df_cl, use_container_width=True, hide_index=True)
+                                if st.button("🧹 Fusionner les classes en double (ex: 02 et 22)", key="btn_merge_cl"):
+                    ok_m, msg_m = db.fusionner_doublons_classes()
+                    if ok_m:
+                        st.success(msg_m)
+                        st.rerun()
+                    else:
+                        st.error(msg_m)
             else:
                 st.info("Commencez par ajouter votre première classe à gauche.")
 

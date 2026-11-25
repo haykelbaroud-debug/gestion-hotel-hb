@@ -162,25 +162,6 @@ def get_connection():
         return _TursoConnWrapper(local_conn, url, token)
     return local_conn
 
-    def close(self):
-        try:
-            self._conn.close()
-        except Exception:
-            pass
-
-    def __getattr__(self, name):
-        return getattr(self._conn, name)
-
-def get_connection():
-    url, token = _get_turso_secrets()
-    if libsql is not None and url and token:
-        conn = libsql.connect(DB_PATH, sync_url=url, auth_token=token)
-        try:
-            conn.sync()
-        except Exception:
-            pass
-        return _TursoConnWrapper(conn)
-    return sqlite3.connect(DB_PATH)
 
 def initialiser_base():
     conn = get_connection()

@@ -1848,36 +1848,68 @@ def importer_base_articles_excel(chemin_excel, ecraser_existants=False):
 
 def fusionner_doublons_classes():
     """
-    Regroupe les classes ayant exactement le même libellé, conserve le code officiel
-    (priorité aux codes 01..14 ou au plus petit code), réaffecte les familles et articles,
-    et supprime les doublons (22, 33, 44, etc.).
+    Fusionne les doublons de classes (ex: 1 et 01 -> 01 BOISSONS, 2 et 22 -> 02 ALIMENTATION)
+    en donnant la priorité absolue aux codes officiels 01..14, puis fusionne les familles en double.
     """
+    import unicodedata
+
+    def norm_txt(s):
+        s = str(s or "").strip().upper()
+        s = "".join(ch for ch in unicodedata.normalize("NFD", s) if unicodedata.category(ch) != "Mn")
+        return s.rstrip("S")
+
     conn = get_connection()
-    nb_suppr = 0
+    nb_suppr_cl, nb_suppr_fam = 0, 0
     try:
         c = conn.cursor()
-        c.execute("SELECT code, UPPER(TRIM(libelle)) FROM classes ORDER BY LENGTH(code) ASC, code ASC")
-        rows = c.fetchall()
 
-        lib_vers_principal = {}
-        doublons = []  # liste de (ancien_code, code_principal)
+        # 1. Harmoniser les codes 1..9 en 01..09 si le code 01..09 existe ou non
+        codes_officiels = {
+            "01": "BOISSONS", "02": "ALIMENTATION", "03": "FRTS BUREAUX",
+            "04": "HYGIENE", "05": "FRTS CLIENTS", "06": "PME & PMC",
+            "07": "MAINTENANCE", "08": "LINGE & UNIFORME", "09": "EMBALLAGE",
+            "10": "PRODUITS PISCINES & SEL", "11": "EXTRA ARTICLES",
+            "12": "ANIMATION ARTICLES", "13": "THALASSO", "14": "ACHATS DIVERS"
+        }
 
-        for code_c, lib_c in rows:
-            if lib_c not in lib_vers_principal:
-                lib_vers_principal[lib_c] = code_c
-            else:
-                code_maitre = lib_vers_principal[lib_c]
+        c.execute("SELECT code, libelle FROM classes")
+        toutes_cl = c.fetchall()
+
+        # Priorité aux codes officiels 01..14
+        lib_vers_maitre = {norm_txt(lib): code for code, lib in codes_officiels.items()}
+        for code_off, lib_off in codes_officiels.items():
+            c.execute("INSERT OR IGNORE INTO classes (code, libelle, actif) VALUES (?, ?, 1)", (code_off, lib_off))
+            c.execute("UPDATE classes SET libelle = ? WHERE code = ?", (lib_off, code_off))
+
+        for code_c, lib_c in toutes_cl:
+            cle = norm_txt(lib_c)
+            if cle in lib_vers_maitre:
+                code_maitre = lib_vers_maitre[cle]
                 if code_c != code_maitre:
-                    doublons.append((code_c, code_maitre))
+                    c.execute("UPDATE familles SET code_classe = ? WHERE code_classe = ?", (code_maitre, code_c))
+                    c.execute("UPDATE articles SET classe = ? WHERE classe = ?", (code_maitre, code_c))
+                    c.execute("DELETE FROM classes WHERE code = ?", (code_c,))
+                    nb_suppr_cl += 1
+            else:
+                lib_vers_maitre[cle] = code_c
 
-        for ancien_code, code_maitre in doublons:
-            c.execute("UPDATE familles SET code_classe = ? WHERE code_classe = ?", (code_maitre, ancien_code))
-            c.execute("UPDATE articles SET classe = ? WHERE classe = ?", (code_maitre, ancien_code))
-            c.execute("DELETE FROM classes WHERE code = ?", (ancien_code,))
-            nb_suppr += 1
+        # 2. Fusionner également les familles ayant le même libellé dans la même classe
+        c.execute("SELECT code, libelle, code_classe FROM familles ORDER BY LENGTH(code) ASC, code ASC")
+        toutes_fam = c.fetchall()
+        fam_vers_maitre = {}
+        for code_f, lib_f, cl_f in toutes_fam:
+            cle_f = (cl_f, norm_txt(lib_f))
+            if cle_f not in fam_vers_maitre:
+                fam_vers_maitre[cle_f] = code_f
+            else:
+                fam_maitre = fam_vers_maitre[cle_f]
+                if code_f != fam_maitre:
+                    c.execute("UPDATE sous_familles SET code_famille = ? WHERE code_famille = ?", (fam_maitre, code_f))
+                    c.execute("DELETE FROM familles WHERE code = ?", (code_f,))
+                    nb_suppr_fam += 1
 
         conn.commit()
-        return True, f"Nettoyage terminé : {nb_suppr} classe(s) en double fusionnée(s) et supprimée(s)."
+        return True, f"Nettoyage réussi : {nb_suppr_cl} classe(s) et {nb_suppr_fam} famille(s) en double fusionnée(s) vers les codes officiels 01..14 !"
     except Exception as e:
         return False, f"Erreur lors de la fusion : {e}"
     finally:

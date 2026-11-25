@@ -1749,7 +1749,7 @@ def lire_fichier_base_octets():
     """
     import os
     import tempfile
-    conn_src = get_connection()
+    conn_src = sqlite3.connect(DB_NAME, timeout=30)
     tmp_path = None
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".db") as tmp:

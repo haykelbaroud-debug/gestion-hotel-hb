@@ -471,6 +471,13 @@ elif menu == "⚙️ Paramétrage de base":
                         st.rerun()
                     else:
                         st.error(msg_m)
+                                        if st.button("🔄 Reconstruire la Nomenclature Officielle Complète (14 Classes / 37 Familles / 95 Sous-Familles)", type="primary", key="btn_rebuild_nom"):
+                    ok_r, msg_r = db.reconstruire_nomenclature_officielle()
+                    if ok_r:
+                        st.success(msg_r)
+                        st.rerun()
+                    else:
+                        st.error(msg_r)
             else:
                 st.info("Commencez par ajouter votre première classe à gauche.")
 

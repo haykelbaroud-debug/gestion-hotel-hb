@@ -50,53 +50,117 @@ def nettoyer_nombre(val):
     except ValueError:
         return 0.0
 
-import os
-import sqlite3
-import openpyxl
-from operator import itemgetter
+import json
+import urllib.request
 
 try:
-    import streamlit as st
+    import streamlit as _st_turso
 except Exception:
-    st = None
-
-try:
-    import libsql_experimental as libsql
-except Exception:
-    libsql = None
-
-DB_PATH = "hotel_erp_pro.db"
+    _st_turso = None
 
 def _get_turso_secrets():
     url, token = "", ""
-    if st is not None:
+    if _st_turso is not None:
         try:
-            url = st.secrets.get("TURSO_DATABASE_URL", "")
-            token = st.secrets.get("TURSO_AUTH_TOKEN", "")
+            url = _st_turso.secrets.get("TURSO_DATABASE_URL", "")
+            token = _st_turso.secrets.get("TURSO_AUTH_TOKEN", "")
         except Exception:
             pass
-    if not url:
-        url = os.environ.get("TURSO_DATABASE_URL", "")
-        token = os.environ.get("TURSO_AUTH_TOKEN", "")
-    return url, token
+    if url.startswith("libsql://"):
+        url = "https://" + url[len("libsql://"):]
+    return url.rstrip("/"), token
+
+class _TursoCursorWrapper:
+    def __init__(self, local_cur, remote_exec_fn):
+        self._cur = local_cur
+        self._remote_exec = remote_exec_fn
+
+    def execute(self, sql, params=()):
+        res = self._cur.execute(sql, params)
+        sql_up = sql.strip().upper()
+        if sql_up.startswith(("INSERT", "UPDATE", "DELETE", "CREATE", "ALTER", "DROP", "REPLACE")):
+            self._remote_exec(sql, params)
+        return res
+
+    def executemany(self, sql, seq_of_params):
+        res = self._cur.executemany(sql, seq_of_params)
+        for p in seq_of_params:
+            self._remote_exec(sql, p)
+        return res
+
+    def fetchone(self):
+        return self._cur.fetchone()
+
+    def fetchall(self):
+        return self._cur.fetchall()
+
+    @property
+    def rowcount(self):
+        return self._cur.rowcount
+
+    def close(self):
+        return self._cur.close()
 
 class _TursoConnWrapper:
-    """Enveloppe transparente pour synchroniser automatiquement avec Turso à chaque commit()."""
-    def __init__(self, conn):
-        self._conn = conn
+    def __init__(self, local_conn, url, token):
+        self._conn = local_conn
+        self._url = url
+        self._token = token
+        self._pending = []
+
+    def _queue_remote(self, sql, params=()):
+        args = []
+        for p in (params or ()):
+            if p is None:
+                args.append({"type": "null"})
+            elif isinstance(p, bool):
+                args.append({"type": "integer", "value": "1" if p else "0"})
+            elif isinstance(p, int):
+                args.append({"type": "integer", "value": str(p)})
+            elif isinstance(p, float):
+                args.append({"type": "float", "value": p})
+            else:
+                args.append({"type": "text", "value": str(p)})
+        self._pending.append({"type": "execute", "stmt": {"sql": sql, "args": args}})
 
     def cursor(self):
-        return self._conn.cursor()
+        return _TursoCursorWrapper(self._conn.cursor(), self._queue_remote)
 
-    def execute(self, *args, **kwargs):
-        return self._conn.execute(*args, **kwargs)
+    def execute(self, sql, params=()):
+        cur = self.cursor()
+        return cur.execute(sql, params)
 
     def commit(self):
         self._conn.commit()
-        try:
-            self._conn.sync()
-        except Exception:
-            pass
+        if self._pending and self._url and self._token:
+            try:
+                reqs = self._pending + [{"type": "close"}]
+                payload = json.dumps({"requests": reqs}).encode("utf-8")
+                req = urllib.request.Request(
+                    f"{self._url}/v2/pipeline",
+                    data=payload,
+                    headers={
+                        "Authorization": f"Bearer {self._token}",
+                        "Content-Type": "application/json"
+                    },
+                    method="POST"
+                )
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    resp.read()
+            except Exception:
+                pass
+            finally:
+                self._pending = []
+
+    def close(self):
+        self._conn.close()
+
+def get_connection():
+    local_conn = sqlite3.connect(DB_NAME, timeout=30, check_same_thread=False)
+    url, token = _get_turso_secrets()
+    if url and token:
+        return _TursoConnWrapper(local_conn, url, token)
+    return local_conn
 
     def close(self):
         try:

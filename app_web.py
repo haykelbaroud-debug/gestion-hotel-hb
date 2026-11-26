@@ -676,7 +676,7 @@ elif menu == "⚙️ Paramétrage de base":
 
                         # Construction 100% dynamique de la hiérarchie depuis SQLite (codes + libellés réels)
         conn_nom = db.get_connection()
-                c_nom = conn_nom.cursor()
+            c_nom = conn_nom.cursor()
 
         def _lire_table_nom(tbl_name, mot_parent=None):
             c_nom.execute(f"PRAGMA table_info({tbl_name})")

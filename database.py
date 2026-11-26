@@ -220,7 +220,7 @@ def pousser_toute_la_base_vers_turso():
         local_conn.close()
 
 def synchroniser_depuis_turso():
-    """Télécharge toutes les tables depuis Turso si la base locale est vide après un redémarrage Streamlit."""
+    """Télécharge toutes les tables depuis Turso par paquets rapides de 2000 lignes si la base locale est vide."""
     url, token = _get_turso_secrets()
     if not url or not token:
         return
@@ -234,34 +234,39 @@ def synchroniser_depuis_turso():
         except Exception:
             pass
 
-        reqs = [{"type": "execute", "stmt": {"sql": "SELECT name, sql FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"}}, {"type": "close"}]
-        req = urllib.request.Request(
-            f"{url}/v2/pipeline",
-            data=json.dumps({"requests": reqs}).encode("utf-8"),
-            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-            method="POST"
-        )
-        with urllib.request.urlopen(req, timeout=25) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-
-        rows_tbl = data["results"]["response"]["result"]["rows"]
-        for r in rows_tbl:
-            tbl_name = r["value"]
-            tbl_sql = r["value"]
-            c_loc.execute(tbl_sql.replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS "))
-            req_data = urllib.request.Request(
+        def _exec_turso(sql_str):
+            req = urllib.request.Request(
                 f"{url}/v2/pipeline",
-                data=json.dumps({"requests": [{"type": "execute", "stmt": {"sql": f"SELECT * FROM {tbl_name}"}}, {"type": "close"}]}).encode("utf-8"),
+                data=json.dumps({"requests": [{"type": "execute", "stmt": {"sql": sql_str}}, {"type": "close"}]}).encode("utf-8"),
                 headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
                 method="POST"
             )
-            with urllib.request.urlopen(req_data, timeout=30) as r_d:
-                res_d = json.loads(r_d.read().decode("utf-8"))["results"]["response"]["result"]
-            cols = [col["name"] for col in res_d["cols"]]
-            if cols and res_d["rows"]:
+            with urllib.request.urlopen(req, timeout=25) as resp:
+                return json.loads(resp.read().decode("utf-8"))["results"].pop(0)["response"]["result"]
+
+        res_tbl = _exec_turso("SELECT name, sql FROM sqlite_master WHERE type='table'")
+        for r in res_tbl["rows"]:
+            tbl_name = r.pop(0)["value"]
+            tbl_sql = r.pop(0)["value"]
+            if not tbl_name or tbl_name.startswith("sqlite_") or not tbl_sql:
+                continue
+            c_loc.execute(tbl_sql.replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS "))
+
+            offset = 0
+            batch_size = 2000
+            while True:
+                res_d = _exec_turso(f"SELECT * FROM {tbl_name} LIMIT {batch_size} OFFSET {offset}")
+                cols = [col["name"] for col in res_d["cols"]]
+                rows_batch = res_d["rows"]
+                if not cols or not rows_batch:
+                    break
                 placeholders = ",".join(["?"] * len(cols))
-                vals_list = [[None if cell["type"] == "null" else cell.get("value") for cell in row] for row in res_d["rows"]]
+                vals_list = [[None if cell["type"] == "null" else cell.get("value") for cell in row] for row in rows_batch]
                 c_loc.executemany(f"INSERT OR REPLACE INTO {tbl_name} ({','.join(cols)}) VALUES ({placeholders})", vals_list)
+                if len(rows_batch) < batch_size:
+                    break
+                offset += batch_size
+
         local_conn.commit()
     except Exception:
         pass

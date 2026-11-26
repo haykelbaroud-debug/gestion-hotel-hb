@@ -674,50 +674,63 @@ elif menu == "⚙️ Paramétrage de base":
         cl_ok_act, fam_ok_act, sf_ok_act, art_exc_act = db.lire_config_autorisations_entite(type_ent_code, code_ent_sel)
         tous_art_m8 = _cache_articles_complets()
 
-                        # Construction 100% dynamique de la hiérarchie depuis SQLite (codes + libellés réels)
+                               # Construction propre de la hiérarchie depuis SQLite
         conn_nom = db.get_connection()
         c_nom = conn_nom.cursor()
-
-        def _lire_table_nom(tbl_name, mot_parent=None):
-            c_nom.execute(f"PRAGMA table_info({tbl_name})")
-            cols = [itemgetter(1)(r) for r in c_nom.fetchall()]
-            col_code = next((c for c in cols if c.lower() == "code"), cols[0])
-            col_lib = next((c for c in cols if any(k in c.lower() for k in ("libelle", "nom", "designation", "intitule"))), col_code)
-            if mot_parent:
-                col_par = next((c for c in cols if mot_parent in c.lower()), cols[-1])
-                c_nom.execute(f"SELECT {col_code}, {col_lib}, {col_par} FROM {tbl_name}")
-            else:
-                c_nom.execute(f"SELECT {col_code}, {col_lib} FROM {tbl_name}")
-            return c_nom.fetchall()
-
-        rows_cl = _lire_table_nom("classes")
-        rows_fam = _lire_table_nom("familles", "classe")
-        rows_sf = _lire_table_nom("sous_familles", "famille")
+        c_nom.execute("SELECT * FROM classes")
+        raw_cl = c_nom.fetchall()
+        c_nom.execute("SELECT * FROM familles")
+        raw_fam = c_nom.fetchall()
+        c_nom.execute("SELECT * FROM sous_familles")
+        raw_sf = c_nom.fetchall()
         conn_nom.close()
 
-        lib_cl = {str(itemgetter(0)(r)).strip().upper(): str(itemgetter(1)(r) or itemgetter(0)(r)).strip() for r in rows_cl if r}
+        # classes: (code, libelle)
+        lib_cl = {str(itemgetter(0)(r)).strip().upper(): str(itemgetter(1)(r) or itemgetter(0)(r)).strip() for r in raw_cl if r}
         lib_to_code_cl = {v.upper(): k for k, v in lib_cl.items()}
-        lib_fam = {str(itemgetter(0)(r)).strip().upper(): str(itemgetter(1)(r) or itemgetter(0)(r)).strip() for r in rows_fam if r}
-        lib_to_code_fam = {v.upper(): k for k, v in lib_fam.items()}
-        lib_sf = {str(itemgetter(0)(r)).strip().upper(): str(itemgetter(1)(r) or itemgetter(0)(r)).strip() for r in rows_sf if r}
 
+        # familles: si len==3 -> (code, libelle, code_classe) ou (code, code_classe, libelle)
+        lib_fam = {}
         cl_to_fam = {}
-        for f_code, f_lib, c_parent in rows_fam:
-            raw_c = str(c_parent or "").strip().upper()
-            c_u = raw_c if raw_c in lib_cl else lib_to_code_cl.get(raw_c, raw_c)
-            f_u = str(f_code or "").strip().upper()
-            if c_u and f_u:
-                cl_to_fam.setdefault(c_u, set()).add(f_u)
+        for r in raw_fam:
+            if not r:
+                continue
+            f_code = str(itemgetter(0)(r)).strip().upper()
+            v1 = str(itemgetter(1)(r) or "").strip()
+            v2 = str(itemgetter(2)(r) or "").strip() if len(r) > 2 else ""
+            # Détecter lequel de v1 ou v2 est la classe parente
+            if v1.upper() in lib_cl or v1.upper() in lib_to_code_cl:
+                c_par_raw, f_nom = v1.upper(), (v2 or f_code)
+            else:
+                f_nom, c_par_raw = (v1 or f_code), v2.upper()
+            lib_fam[f_code] = f_nom
+            c_u = c_par_raw if c_par_raw in lib_cl else lib_to_code_cl.get(c_par_raw, c_par_raw)
+            if c_u:
+                cl_to_fam.setdefault(c_u, set()).add(f_code)
 
+        lib_to_code_fam = {v.upper(): k for k, v in lib_fam.items()}
+
+        # sous_familles: (code, libelle, code_famille) ou (code, code_famille, libelle)
+        lib_sf = {}
         fam_to_sf = {}
-        for s_code, s_lib, f_parent in rows_sf:
-            raw_f = str(f_parent or "").strip().upper()
-            f_u = raw_f if raw_f in lib_fam else lib_to_code_fam.get(raw_f, raw_f)
-            s_u = str(s_code or "").strip().upper()
-            if f_u and s_u:
-                fam_to_sf.setdefault(f_u, set()).add(s_u)
+        for r in raw_sf:
+            if not r:
+                continue
+            s_code = str(itemgetter(0)(r)).strip().upper()
+            v1 = str(itemgetter(1)(r) or "").strip()
+            v2 = str(itemgetter(2)(r) or "").strip() if len(r) > 2 else ""
+            if v1.upper() in lib_fam or v1.upper() in lib_to_code_fam:
+                f_par_raw, s_nom = v1.upper(), (v2 or s_code)
+            else:
+                s_nom, f_par_raw = (v1 or s_code), v2.upper()
+            lib_sf[s_code] = s_nom
+            f_u = f_par_raw if f_par_raw in lib_fam else lib_to_code_fam.get(f_par_raw, f_par_raw)
+            if f_u:
+                fam_to_sf.setdefault(f_u, set()).add(s_code)
+
         liste_cl_sorted = sorted(lib_cl.keys())
         map_cl = {c: f"{c} - {lib_cl[c]}" if lib_cl[c].upper() != c else c for c in liste_cl_sorted}
+
 
         # 1. Classes AUTORISÉES
         def_cl = [c for c in cl_ok_act if c in map_cl]

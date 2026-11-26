@@ -674,34 +674,41 @@ elif menu == "⚙️ Paramétrage de base":
         cl_ok_act, fam_ok_act, sf_ok_act, art_exc_act = db.lire_config_autorisations_entite(type_ent_code, code_ent_sel)
         tous_art_m8 = _cache_articles_complets()
 
-        # Construction fiable de la hiérarchie directement depuis les articles actifs et les tables de référence
+                # Construction fiable de la hiérarchie (codes & libellés)
         conn_nom = db.get_connection()
         c_nom = conn_nom.cursor()
         c_nom.execute("SELECT code, libelle FROM classes")
-        lib_cl = {str(r).upper(): r[1] for r in c_nom.fetchall()}
+        rows_cl = c_nom.fetchall()
         c_nom.execute("SELECT code, libelle FROM familles")
-        lib_fam = {str(r).upper(): r[1] for r in c_nom.fetchall()}
+        rows_fam = c_nom.fetchall()
         c_nom.execute("SELECT code, libelle FROM sous_familles")
-        lib_sf = {str(r).upper(): r[1] for r in c_nom.fetchall()}
+        rows_sf = c_nom.fetchall()
         conn_nom.close()
+
+        lib_cl = {str(r).strip().upper(): str(r).strip() for r in rows_cl if r}
+        lib_to_code_cl = {str(r).strip().upper(): str(r).strip().upper() for r in rows_cl if r and r}
+        lib_fam = {str(r).strip().upper(): str(r).strip() for r in rows_fam if r}
+        lib_to_code_fam = {str(r).strip().upper(): str(r).strip().upper() for r in rows_fam if r and r}
+        lib_sf = {str(r).strip().upper(): str(r).strip() for r in rows_sf if r}
 
         cl_to_fam = {}
         fam_to_sf = {}
-        toutes_cl_set = set()
+        toutes_cl_set = set(lib_cl.keys())
+
         for a in tous_art_m8:
-            cl_u = str(itemgetter(2)(a) or "").strip().upper()
-            fam_u = str(itemgetter(3)(a) or "").strip().upper()
+            raw_cl = str(itemgetter(2)(a) or "").strip().upper()
+            raw_fam = str(itemgetter(3)(a) or "").strip().upper()
             sf_u = str(itemgetter(4)(a) or "").strip().upper()
+
+            cl_u = raw_cl if raw_cl in lib_cl else lib_to_code_cl.get(raw_cl, raw_cl)
+            fam_u = raw_fam if raw_fam in lib_fam else lib_to_code_fam.get(raw_fam, raw_fam)
+
             if cl_u:
                 toutes_cl_set.add(cl_u)
                 if fam_u:
                     cl_to_fam.setdefault(cl_u, set()).add(fam_u)
             if fam_u and sf_u:
                 fam_to_sf.setdefault(fam_u, set()).add(sf_u)
-
-        # Ajout des classes existantes même sans article
-        for c_k in lib_cl.keys():
-            toutes_cl_set.add(c_k)
 
         liste_cl_sorted = sorted(toutes_cl_set)
         map_cl = {c: f"{c} - {lib_cl[c]}" if c in lib_cl and lib_cl[c] != c else c for c in liste_cl_sorted}
@@ -752,9 +759,12 @@ elif menu == "⚙️ Paramétrage de base":
         # 4. Articles précis à DÉSACTIVER / EXCLURE
         articles_eligibles = []
         for a in tous_art_m8:
-            cl_u = str(itemgetter(2)(a) or "").strip().upper()
-            fam_u = str(itemgetter(3)(a) or "").strip().upper()
+            raw_cl = str(itemgetter(2)(a) or "").strip().upper()
+            raw_fam = str(itemgetter(3)(a) or "").strip().upper()
             sf_u = str(itemgetter(4)(a) or "").strip().upper()
+            cl_u = raw_cl if raw_cl in lib_cl else lib_to_code_cl.get(raw_cl, raw_cl)
+            fam_u = raw_fam if raw_fam in lib_fam else lib_to_code_fam.get(raw_fam, raw_fam)
+
             if sel_sf:
                 if sf_u in sel_sf:
                     articles_eligibles.append(a)

@@ -1130,12 +1130,13 @@ elif menu == "🧾 Achats & Mouvements":
             ref_ext = c_ref.text_input("N° BL / Facture / Référence :", key=f"ref_{type_doc}")
             obs_doc = c_obs.text_input("Observation / Motif :", key=f"obs_{type_doc}")
 
-            st.markdown("#### Ajout d'articles au bon")
+         st.markdown("#### Ajout d'articles au bon")
          if besoin_fournisseur and fourn_sel:
              articles_filtres = db.filtrer_articles_autorises(articles_actifs, "FOURNISSEUR", fourn_sel)
          else:
              articles_filtres = db.filtrer_articles_autorises(articles_actifs, "DEPARTEMENT", dept_sel)
-            map_art = {
+         map_art = {
+
                 itemgetter(0)(a): f"{itemgetter(0)(a)} - {itemgetter(1)(a)} ({itemgetter(6)(a)})"
                 for a in articles_filtres
             }

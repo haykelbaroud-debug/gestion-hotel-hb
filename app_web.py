@@ -704,7 +704,7 @@ elif menu == "⚙️ Paramétrage de base":
             if fam_u:
                 art_par_fam.setdefault(fam_u, []).append(a)
                 if sf_u:
-                    fam_to_sf.setdefault(f_u, set()).add(sf_u)
+                    fam_to_sf.setdefault(fam_u, set()).add(sf_u)
             if sf_u:
                 art_par_sf.setdefault(sf_u, []).append(a)
 

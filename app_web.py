@@ -20,9 +20,22 @@ def _demarrer_base_une_seule_fois():
     db.initialiser_transferts_m4()
     db.initialiser_stock_inventaire_m5()
     db.initialiser_nuitees_m7()
+    db.creer_index_performance()
     return True
 
 _demarrer_base_une_seule_fois()
+
+@st.cache_data(ttl=120)
+def _cache_articles():
+    return db.lister_articles()
+
+@st.cache_data(ttl=120)
+def _cache_fournisseurs():
+    return db.lister_fournisseurs()
+
+@st.cache_data(ttl=300)
+def _cache_depts_actifs():
+    return db.lister_departements_complet(seulement_actifs=True)
 
 def generer_excel_memoire(titre, entetes, lignes):
     import openpyxl
@@ -901,7 +914,7 @@ elif menu == "🗂️ Base de données":
                         st.success(f"Injection réussie !\n- **{n_cl}** nouvelles Classes\n- **{n_fam}** nouvelles Familles\n- **{n_sf}** nouvelles Sous-Familles\n- **{n_art}** Articles injectés")
                     else:
                         st.error(f"Erreur lors de l'injection : {res_ba}")
-elif menu == "🧾 Achats & Mouvements":
+    elif menu == "🧾 Achats & Mouvements":
     from operator import itemgetter
     from datetime import date
 
@@ -914,10 +927,11 @@ elif menu == "🧾 Achats & Mouvements":
         "🔐 Autorisations Dépôts"
     ])
 
-    def afficher_ecran_document(type_doc, prefixe, titre_doc, besoin_fournisseur=True):
-        articles_actifs = db.lister_articles_complet(seulement_actifs=True)
-        fournisseurs_actifs = db.lister_fournisseurs(seulement_actifs=True)
-        depts_autorises = db.lister_depts_achats()
+def afficher_ecran_document(type_doc, prefixe, titre_doc, besoin_fournisseur=True):
+        articles_actifs = _cache_articles_complets()
+        fournisseurs_actifs = _cache_fournisseurs()
+        depts_autorises = _cache_depts_achats()
+
 
         mode_doc = st.radio(
             "Opération :",
@@ -1136,11 +1150,11 @@ elif menu == "🔄 Transferts":
         "🚚 Bon de Transfert Direct"
     ])
 
-    articles_actifs = db.lister_articles_complet(seulement_actifs=True)
-    depts_actifs = db.lister_departements_complet(seulement_actifs=True)
+    articles_actifs = _cache_articles_complets()
+    depts_actifs = _cache_depts_actifs()
     map_depts_t = {itemgetter(0)(d): f"{itemgetter(0)(d)} - {itemgetter(1)(d)}" for d in depts_actifs}
     liste_codes_depts = list(map_depts_t.keys())
-    idx_eco = liste_codes_depts.index("ECO") if "ECO" in liste_codes_depts else 0
+    idx_eco = liste_codes_depts.index("01") if "01" in liste_codes_depts else (liste_codes_depts.index("ECO") if "ECO" in liste_codes_depts else 0)
 
     with ttab1:
         mode_dt = st.radio("Opération :", ["➕ Nouvelle Demande", "📋 Consulter / Modifier / Supprimer"], key="mode_dt", horizontal=True)

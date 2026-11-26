@@ -643,9 +643,9 @@ elif menu == "⚙️ Paramétrage de base":
                 st.dataframe(df_sf, use_container_width=True, hide_index=True)
             else:
                 st.info("Aucune sous-famille enregistrée.")
-    st.divider()
+        st.divider()
     st.subheader("🔐 Autorisations par Classe, Famille, Sous-Famille & Article")
-    st.info("Activez uniquement les Classes, Familles ou Sous-Familles autorisées pour un Fournisseur ou un Département, et décochez les articles précis à exclure.")
+    st.info("Cochez uniquement les Classes, Familles ou Sous-Familles AUTORISÉES pour ce Fournisseur ou Département (tout ce qui n'est pas coché sera masqué en saisie), puis décochez les articles précis à exclure.")
 
     type_ent_sel = st.radio(
         "Type d'entité à paramétrer :",
@@ -672,78 +672,89 @@ elif menu == "⚙️ Paramétrage de base":
         )
 
         cl_ok_act, fam_ok_act, sf_ok_act, art_exc_act = db.lire_config_autorisations_entite(type_ent_code, code_ent_sel)
-
-        # Chargement de la nomenclature et des articles actifs
         tous_art_m8 = _cache_articles_complets()
+
+        # Construction fiable de la hiérarchie directement depuis les articles actifs et les tables de référence
         conn_nom = db.get_connection()
         c_nom = conn_nom.cursor()
-        c_nom.execute("SELECT code, libelle FROM classes ORDER BY code")
-        liste_cl = c_nom.fetchall()
-        c_nom.execute("SELECT code, libelle, code_classe FROM familles ORDER BY code")
-        liste_fam = c_nom.fetchall()
-        c_nom.execute("SELECT code, libelle, code_famille FROM sous_familles ORDER BY code")
-        liste_sf = c_nom.fetchall()
+        c_nom.execute("SELECT code, libelle FROM classes")
+        lib_cl = {str(r).upper(): r[1] for r in c_nom.fetchall()}
+        c_nom.execute("SELECT code, libelle FROM familles")
+        lib_fam = {str(r).upper(): r[1] for r in c_nom.fetchall()}
+        c_nom.execute("SELECT code, libelle FROM sous_familles")
+        lib_sf = {str(r).upper(): r[1] for r in c_nom.fetchall()}
         conn_nom.close()
 
-        map_cl = {itemgetter(0)(x).upper(): f"{itemgetter(0)(x)} - {itemgetter(1)(x)}" for x in liste_cl}
-        map_fam = {itemgetter(0)(x).upper(): f"{itemgetter(0)(x)} - {itemgetter(1)(x)} [Cl: {itemgetter(2)(x)}]" for x in liste_fam}
-        map_sf = {itemgetter(0)(x).upper(): f"{itemgetter(0)(x)} - {itemgetter(1)(x)} [Fam: {itemgetter(2)(x)}]" for x in liste_sf}
+        cl_to_fam = {}
+        fam_to_sf = {}
+        toutes_cl_set = set()
+        for a in tous_art_m8:
+            cl_u = str(itemgetter(2)(a) or "").strip().upper()
+            fam_u = str(itemgetter(3)(a) or "").strip().upper()
+            sf_u = str(itemgetter(4)(a) or "").strip().upper()
+            if cl_u:
+                toutes_cl_set.add(cl_u)
+                if fam_u:
+                    cl_to_fam.setdefault(cl_u, set()).add(fam_u)
+            if fam_u and sf_u:
+                fam_to_sf.setdefault(fam_u, set()).add(sf_u)
 
-        # Étape A : Sélection des Classes
+        # Ajout des classes existantes même sans article
+        for c_k in lib_cl.keys():
+            toutes_cl_set.add(c_k)
+
+        liste_cl_sorted = sorted(toutes_cl_set)
+        map_cl = {c: f"{c} - {lib_cl[c]}" if c in lib_cl and lib_cl[c] != c else c for c in liste_cl_sorted}
+
+        # 1. Classes AUTORISÉES
         def_cl = [c for c in cl_ok_act if c in map_cl]
         sel_classes = st.multiselect(
-            "1️⃣ Classes autorisées (laisser vide = toutes les classes autorisées) :",
-            list(map_cl.keys()),
+            "1️⃣ Classes AUTORISÉES (sélectionnez les classes actives pour cette entité ; vide = toutes autorisées) :",
+            liste_cl_sorted,
             default=def_cl,
             format_func=lambda x: map_cl[x],
             key=f"ms_cl_{type_ent_code}_{code_ent_sel}"
         )
 
-        # Étape B : Sélection des Familles (filtrées selon les classes choisies si renseignées)
-        fam_dispo = [
-            itemgetter(0)(x).upper() for x in liste_fam
-            if not sel_classes or str(itemgetter(2)(x) or "").upper() in sel_classes
-        ]
+        # 2. Familles disponibles selon les classes choisies
+        fam_dispo_set = set()
+        for c in (sel_classes if sel_classes else liste_cl_sorted):
+            fam_dispo_set.update(cl_to_fam.get(c, set()))
+        fam_dispo = sorted(fam_dispo_set)
+        map_fam = {f: f"{f} - {lib_fam[f]}" if f in lib_fam and lib_fam[f] != f else f for f in fam_dispo}
+
         def_fam = [f for f in fam_ok_act if f in fam_dispo]
         sel_familles = st.multiselect(
-            "2️⃣ Familles autorisées (optionnel : affine les classes choisies) :",
+            "2️⃣ Familles AUTORISÉES (optionnel : laissez vide pour garder toutes les familles des classes cochées) :",
             fam_dispo,
             default=def_fam,
             format_func=lambda x: map_fam[x],
             key=f"ms_fam_{type_ent_code}_{code_ent_sel}"
         )
 
-        # Étape C : Sélection des Sous-Familles (filtrées selon les familles ou classes choisies)
-        sf_dispo = []
-        for x in liste_sf:
-            sf_c = itemgetter(0)(x).upper()
-            f_c = str(itemgetter(2)(x) or "").upper()
-            # Trouver la classe parente
-            cl_parente = next((str(itemgetter(2)(fm) or "").upper() for fm in liste_fam if itemgetter(0)(fm).upper() == f_c), "")
-            if sel_familles:
-                if f_c in sel_familles:
-                    sf_dispo.append(sf_c)
-            elif sel_classes:
-                if cl_parente in sel_classes:
-                    sf_dispo.append(sf_c)
-            else:
-                sf_dispo.append(sf_c)
+        # 3. Sous-Familles disponibles selon les familles ou classes choisies
+        sf_dispo_set = set()
+        fams_cibles = sel_familles if sel_familles else fam_dispo
+        for f in fams_cibles:
+            sf_dispo_set.update(fam_to_sf.get(f, set()))
+        sf_dispo = sorted(sf_dispo_set)
+        map_sf = {s: f"{s} - {lib_sf[s]}" if s in lib_sf and lib_sf[s] != s else s for s in sf_dispo}
 
         def_sf = [s for s in sf_ok_act if s in sf_dispo]
         sel_sf = st.multiselect(
-            "3️⃣ Sous-Familles autorisées (optionnel : ex. décocher OIL en ne gardant que MEAT) :",
+            "3️⃣ Sous-Familles AUTORISÉES (optionnel : ne sélectionnez que celles que vous autorisez, les autres seront désactivées) :",
             sf_dispo,
             default=def_sf,
             format_func=lambda x: map_sf[x],
             key=f"ms_sf_{type_ent_code}_{code_ent_sel}"
         )
 
-        # Étape D : Exclure des articles précis parmi les articles correspondant aux niveaux cochés
+        # 4. Articles précis à DÉSACTIVER / EXCLURE
         articles_eligibles = []
         for a in tous_art_m8:
-            cl_u = str(itemgetter(2)(a) or "").upper()
-            fam_u = str(itemgetter(3)(a) or "").upper()
-            sf_u = str(itemgetter(4)(a) or "").upper()
+            cl_u = str(itemgetter(2)(a) or "").strip().upper()
+            fam_u = str(itemgetter(3)(a) or "").strip().upper()
+            sf_u = str(itemgetter(4)(a) or "").strip().upper()
             if sel_sf:
                 if sf_u in sel_sf:
                     articles_eligibles.append(a)
@@ -762,14 +773,13 @@ elif menu == "⚙️ Paramétrage de base":
             }
             def_exc = [c for c in art_exc_act if c in map_art_m8]
             sel_exclus = st.multiselect(
-                f"4️⃣ Articles précis à DÉSACTIVER / EXCLURE temporairement ({len(articles_eligibles)} articles éligibles) :",
+                f"4️⃣ Articles précis à DÉSACTIVER / EXCLURE temporairement ({len(articles_eligibles)} articles dans la sélection) :",
                 list(map_art_m8.keys()),
                 default=def_exc,
                 format_func=lambda x: map_art_m8[x],
                 key=f"ms_exc_{type_ent_code}_{code_ent_sel}"
             )
         elif not sel_classes and not sel_familles and not sel_sf:
-            # Permet aussi d'exclure un article précis sans restreindre toute une classe
             map_art_all = {
                 itemgetter(0)(a).upper(): f"{itemgetter(0)(a)} - {itemgetter(1)(a)}"
                 for a in tous_art_m8
@@ -783,7 +793,7 @@ elif menu == "⚙️ Paramétrage de base":
                 key=f"ms_exc_all_{type_ent_code}_{code_ent_sel}"
             )
 
-        col_b1, col_b2 = st.columns([2, 2])
+        col_b1, col_b2 = st.columns(2)
         if col_b1.button("💾 Enregistrer ce paramétrage", type="primary", key="btn_save_m8"):
             ok_m8, msg_m8 = db.enregistrer_config_autorisations_entite(
                 type_ent_code, code_ent_sel, sel_classes, sel_familles, sel_sf, sel_exclus

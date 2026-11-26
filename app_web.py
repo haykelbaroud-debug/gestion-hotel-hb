@@ -20,6 +20,7 @@ def _demarrer_base_une_seule_fois():
     db.initialiser_transferts_m4()
     db.initialiser_stock_inventaire_m5()
     db.initialiser_nuitees_m7()
+    db.initialiser_autorisations_m8()
     db.creer_index_performance()
     return True
 
@@ -642,6 +643,160 @@ elif menu == "⚙️ Paramétrage de base":
                 st.dataframe(df_sf, use_container_width=True, hide_index=True)
             else:
                 st.info("Aucune sous-famille enregistrée.")
+    st.divider()
+    st.subheader("🔐 Autorisations par Classe, Famille, Sous-Famille & Article")
+    st.info("Activez uniquement les Classes, Familles ou Sous-Familles autorisées pour un Fournisseur ou un Département, et décochez les articles précis à exclure.")
+
+    type_ent_sel = st.radio(
+        "Type d'entité à paramétrer :",
+        ["Fournisseur", "Département"],
+        horizontal=True,
+        key="rad_type_ent_m8"
+    )
+
+    if type_ent_sel == "Fournisseur":
+        tous_fourn = _cache_fournisseurs()
+        map_ent = {itemgetter(0)(f): f"{itemgetter(0)(f)} - {itemgetter(1)(f)}" for f in tous_fourn}
+        type_ent_code = "FOURNISSEUR"
+    else:
+        tous_depts = _cache_depts_actifs()
+        map_ent = {itemgetter(0)(d): f"{itemgetter(0)(d)} - {itemgetter(1)(d)}" for d in tous_depts}
+        type_ent_code = "DEPARTEMENT"
+
+    if map_ent:
+        code_ent_sel = st.selectbox(
+            f"Sélectionner le {type_ent_sel} :",
+            list(map_ent.keys()),
+            format_func=lambda x: map_ent[x],
+            key="sel_ent_m8"
+        )
+
+        cl_ok_act, fam_ok_act, sf_ok_act, art_exc_act = db.lire_config_autorisations_entite(type_ent_code, code_ent_sel)
+
+        # Chargement de la nomenclature et des articles actifs
+        tous_art_m8 = _cache_articles_complets()
+        conn_nom = db.get_connection()
+        c_nom = conn_nom.cursor()
+        c_nom.execute("SELECT code, libelle FROM classes ORDER BY code")
+        liste_cl = c_nom.fetchall()
+        c_nom.execute("SELECT code, libelle, code_classe FROM familles ORDER BY code")
+        liste_fam = c_nom.fetchall()
+        c_nom.execute("SELECT code, libelle, code_famille FROM sous_familles ORDER BY code")
+        liste_sf = c_nom.fetchall()
+        conn_nom.close()
+
+        map_cl = {itemgetter(0)(x).upper(): f"{itemgetter(0)(x)} - {itemgetter(1)(x)}" for x in liste_cl}
+        map_fam = {itemgetter(0)(x).upper(): f"{itemgetter(0)(x)} - {itemgetter(1)(x)} [Cl: {itemgetter(2)(x)}]" for x in liste_fam}
+        map_sf = {itemgetter(0)(x).upper(): f"{itemgetter(0)(x)} - {itemgetter(1)(x)} [Fam: {itemgetter(2)(x)}]" for x in liste_sf}
+
+        # Étape A : Sélection des Classes
+        def_cl = [c for c in cl_ok_act if c in map_cl]
+        sel_classes = st.multiselect(
+            "1️⃣ Classes autorisées (laisser vide = toutes les classes autorisées) :",
+            list(map_cl.keys()),
+            default=def_cl,
+            format_func=lambda x: map_cl[x],
+            key=f"ms_cl_{type_ent_code}_{code_ent_sel}"
+        )
+
+        # Étape B : Sélection des Familles (filtrées selon les classes choisies si renseignées)
+        fam_dispo = [
+            itemgetter(0)(x).upper() for x in liste_fam
+            if not sel_classes or str(itemgetter(2)(x) or "").upper() in sel_classes
+        ]
+        def_fam = [f for f in fam_ok_act if f in fam_dispo]
+        sel_familles = st.multiselect(
+            "2️⃣ Familles autorisées (optionnel : affine les classes choisies) :",
+            fam_dispo,
+            default=def_fam,
+            format_func=lambda x: map_fam[x],
+            key=f"ms_fam_{type_ent_code}_{code_ent_sel}"
+        )
+
+        # Étape C : Sélection des Sous-Familles (filtrées selon les familles ou classes choisies)
+        sf_dispo = []
+        for x in liste_sf:
+            sf_c = itemgetter(0)(x).upper()
+            f_c = str(itemgetter(2)(x) or "").upper()
+            # Trouver la classe parente
+            cl_parente = next((str(itemgetter(2)(fm) or "").upper() for fm in liste_fam if itemgetter(0)(fm).upper() == f_c), "")
+            if sel_familles:
+                if f_c in sel_familles:
+                    sf_dispo.append(sf_c)
+            elif sel_classes:
+                if cl_parente in sel_classes:
+                    sf_dispo.append(sf_c)
+            else:
+                sf_dispo.append(sf_c)
+
+        def_sf = [s for s in sf_ok_act if s in sf_dispo]
+        sel_sf = st.multiselect(
+            "3️⃣ Sous-Familles autorisées (optionnel : ex. décocher OIL en ne gardant que MEAT) :",
+            sf_dispo,
+            default=def_sf,
+            format_func=lambda x: map_sf[x],
+            key=f"ms_sf_{type_ent_code}_{code_ent_sel}"
+        )
+
+        # Étape D : Exclure des articles précis parmi les articles correspondant aux niveaux cochés
+        articles_eligibles = []
+        for a in tous_art_m8:
+            cl_u = str(itemgetter(2)(a) or "").upper()
+            fam_u = str(itemgetter(3)(a) or "").upper()
+            sf_u = str(itemgetter(4)(a) or "").upper()
+            if sel_sf:
+                if sf_u in sel_sf:
+                    articles_eligibles.append(a)
+            elif sel_familles:
+                if fam_u in sel_familles:
+                    articles_eligibles.append(a)
+            elif sel_classes:
+                if cl_u in sel_classes:
+                    articles_eligibles.append(a)
+
+        sel_exclus = []
+        if articles_eligibles:
+            map_art_m8 = {
+                itemgetter(0)(a).upper(): f"{itemgetter(0)(a)} - {itemgetter(1)(a)} [{itemgetter(4)(a)}]"
+                for a in articles_eligibles
+            }
+            def_exc = [c for c in art_exc_act if c in map_art_m8]
+            sel_exclus = st.multiselect(
+                f"4️⃣ Articles précis à DÉSACTIVER / EXCLURE temporairement ({len(articles_eligibles)} articles éligibles) :",
+                list(map_art_m8.keys()),
+                default=def_exc,
+                format_func=lambda x: map_art_m8[x],
+                key=f"ms_exc_{type_ent_code}_{code_ent_sel}"
+            )
+        elif not sel_classes and not sel_familles and not sel_sf:
+            # Permet aussi d'exclure un article précis sans restreindre toute une classe
+            map_art_all = {
+                itemgetter(0)(a).upper(): f"{itemgetter(0)(a)} - {itemgetter(1)(a)}"
+                for a in tous_art_m8
+            }
+            def_exc = [c for c in art_exc_act if c in map_art_all]
+            sel_exclus = st.multiselect(
+                "4️⃣ Articles précis à DÉSACTIVER / EXCLURE (toutes classes actives) :",
+                list(map_art_all.keys()),
+                default=def_exc,
+                format_func=lambda x: map_art_all[x],
+                key=f"ms_exc_all_{type_ent_code}_{code_ent_sel}"
+            )
+
+        col_b1, col_b2 = st.columns([2, 2])
+        if col_b1.button("💾 Enregistrer ce paramétrage", type="primary", key="btn_save_m8"):
+            ok_m8, msg_m8 = db.enregistrer_config_autorisations_entite(
+                type_ent_code, code_ent_sel, sel_classes, sel_familles, sel_sf, sel_exclus
+            )
+            if ok_m8:
+                st.success(msg_m8)
+            else:
+                st.error(msg_m8)
+
+        if col_b2.button("🔄 Tout réactiver (supprimer toutes les restrictions)", key="btn_reset_m8"):
+            db.enregistrer_config_autorisations_entite(type_ent_code, code_ent_sel, [], [], [], [])
+            st.success(f"Toutes les classes, familles et articles sont de nouveau actifs pour {map_ent[code_ent_sel]}.")
+            st.rerun()
 elif menu == "🗂️ Base de données":
     from operator import itemgetter
     btab1, btab2, btab3, btab4 = st.tabs(["📦 Base Articles", "🚚 Base Fournisseurs", "🏢 Base Départements", "📥 Import Base Articles"])
@@ -976,11 +1131,15 @@ elif menu == "🧾 Achats & Mouvements":
             obs_doc = c_obs.text_input("Observation / Motif :", key=f"obs_{type_doc}")
 
             st.markdown("#### Ajout d'articles au bon")
+         if besoin_fournisseur and fourn_sel:
+             articles_filtres = db.filtrer_articles_autorises(articles_actifs, "FOURNISSEUR", fourn_sel)
+         else:
+             articles_filtres = db.filtrer_articles_autorises(articles_actifs, "DEPARTEMENT", dept_sel)
             map_art = {
                 itemgetter(0)(a): f"{itemgetter(0)(a)} - {itemgetter(1)(a)} ({itemgetter(6)(a)})"
-                for a in articles_actifs
+                for a in articles_filtres
             }
-            dict_art_info = {itemgetter(0)(a): a for a in articles_actifs}
+            dict_art_info = {itemgetter(0)(a): a for a in articles_filtres}
 
             ca1, ca2, ca3, ca4 = st.columns([3, 1, 1, 1])
             art_choisi = ca1.selectbox("Article :", list(map_art.keys()), format_func=lambda x: map_art[x], key=f"art_sel_{type_doc}")
@@ -1178,7 +1337,9 @@ elif menu == "🔄 Transferts":
                 dst_dt = c4.selectbox("Département Demandeur :", autres_depts,
                                       format_func=lambda x: map_depts_t[x], key="dst_dt_new")
                 obs_dt = st.text_input("Observation / Besoin :", key="obs_dt_new")
-
+                articles_dt_filtres = db.filtrer_articles_autorises(articles_actifs, "DEPARTEMENT", dst_dt)
+                map_art_t = {itemgetter(0)(a): f"{itemgetter(0)(a)} - {itemgetter(1)(a)} ({itemgetter(6)(a)})" for a in articles_dt_filtres}
+                dict_art_t = {itemgetter(0)(a): a for a in articles_dt_filtres}
                 map_art_t = {itemgetter(0)(a): f"{itemgetter(0)(a)} - {itemgetter(1)(a)} ({itemgetter(6)(a)})" for a in articles_actifs}
                 dict_art_t = {itemgetter(0)(a): a for a in articles_actifs}
 
@@ -1350,9 +1511,9 @@ elif menu == "🔄 Transferts":
                 dst_bt = c4.selectbox("Département Destinataire :", autres_bt,
                                       format_func=lambda x: map_depts_t[x], key="dst_bt_new")
                 obs_bt = st.text_input("Observation :", key="obs_bt_new")
-
-                map_art_bt = {itemgetter(0)(a): f"{itemgetter(0)(a)} - {itemgetter(1)(a)} ({itemgetter(6)(a)})" for a in articles_actifs}
-                dict_art_bt = {itemgetter(0)(a): a for a in articles_actifs}
+                articles_bt_filtres = db.filtrer_articles_autorises(articles_actifs, "DEPARTEMENT", dst_bt)
+                map_art_bt = {itemgetter(0)(a): f"{itemgetter(0)(a)} - {itemgetter(1)(a)} ({itemgetter(6)(a)})" for a in articles_bt_filtres}
+                dict_art_bt = {itemgetter(0)(a): a for a in articles_bt_filtres}
 
                 ca1, ca2, ca3, ca4 = st.columns([3, 1.5, 1.5, 1.5])
                 art_bt = ca1.selectbox("Article :", list(map_art_bt.keys()), format_func=lambda x: map_art_bt[x], key="art_sel_bt")

@@ -915,8 +915,8 @@ elif menu == "🗂️ Base de données":
                     else:
                         st.error(f"Erreur lors de l'injection : {res_ba}")
     elif menu == "🧾 Achats & Mouvements":
-      from operator import itemgetter
-      from datetime import date
+    from operator import itemgetter
+    from datetime import date
 
     atab1, atab2, atab3, atab4, atab5, atab6 = st.tabs([
         "📝 Bon de Commande",
@@ -927,11 +927,10 @@ elif menu == "🗂️ Base de données":
         "🔐 Autorisations Dépôts"
     ])
 
-def afficher_ecran_document(type_doc, prefixe, titre_doc, besoin_fournisseur=True):
+    def afficher_ecran_document(type_doc, prefixe, titre_doc, besoin_fournisseur=True):
         articles_actifs = _cache_articles_complets()
         fournisseurs_actifs = _cache_fournisseurs()
         depts_autorises = _cache_depts_achats()
-
 
         mode_doc = st.radio(
             "Opération :",
@@ -1017,7 +1016,6 @@ def afficher_ecran_document(type_doc, prefixe, titre_doc, besoin_fournisseur=Tru
                         "Total TTC": f"{mttc:,.3f}"
                     })
                 st.dataframe(pd.DataFrame(lignes_aff), use_container_width=True, hide_index=True)
-
                 k1, k2, k3 = st.columns(3)
                 k1.metric("Total HT", f"{tot_ht:,.3f} DT")
                 k2.metric("Total TTC", f"{tot_ttc:,.3f} DT")
@@ -1140,6 +1138,8 @@ def afficher_ecran_document(type_doc, prefixe, titre_doc, besoin_fournisseur=Tru
                     if cc.button("✅ Activer achats", key=f"ena_auth_{dp_code}"):
                         db.basculer_autorisation_achat_dept(dp_code, 1)
                         st.rerun()
+
+                
 elif menu == "🔄 Transferts":
     from operator import itemgetter
     from datetime import date

@@ -2696,3 +2696,130 @@ def preparer_grille_inventaire(code_dept, date_inv):
             "valeur_ecart": 0.0
         })
     return grille
+# ==============================================================================
+# MODULE 8 : MATRICE D'AUTORISATIONS HIÉRARCHIQUES (FOURNISSEURS & DÉPARTEMENTS)
+# ==============================================================================
+
+def initialiser_autorisations_m8():
+    """Crée les tables d'autorisations par nomenclature et d'exclusions d'articles."""
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        # type_entite : 'FOURNISSEUR' ou 'DEPARTEMENT'
+        # niveau : 'CLASSE', 'FAMILLE', 'SOUS_FAMILLE'
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS entite_autorisations_nomenclature (
+                type_entite TEXT NOT NULL,
+                code_entite TEXT NOT NULL,
+                niveau TEXT NOT NULL,
+                code_niveau TEXT NOT NULL,
+                PRIMARY KEY (type_entite, code_entite, niveau, code_niveau)
+            )
+        """)
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS entite_exclusions_articles (
+                type_entite TEXT NOT NULL,
+                code_entite TEXT NOT NULL,
+                code_article TEXT NOT NULL,
+                PRIMARY KEY (type_entite, code_entite, code_article)
+            )
+        """)
+        c.execute("CREATE INDEX IF NOT EXISTS idx_aut_nom ON entite_autorisations_nomenclature(type_entite, code_entite)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_exc_art ON entite_exclusions_articles(type_entite, code_entite)")
+        conn.commit()
+    finally:
+        conn.close()
+
+def lire_config_autorisations_entite(type_entite, code_entite):
+    """Retourne les listes de classes, familles, sous_familles autorisées et articles exclus pour une entité."""
+    conn = sqlite3.connect(DB_NAME, timeout=30)
+    te = type_entite.strip().upper()
+    ce = code_entite.strip().upper()
+    try:
+        c = conn.cursor()
+        c.execute("""
+            SELECT niveau, code_niveau
+            FROM entite_autorisations_nomenclature
+            WHERE UPPER(type_entite) = ? AND UPPER(code_entite) = ?
+        """, (te, ce))
+        classes_ok, familles_ok, sf_ok = set(), set(), set()
+        for niv, code_n in c.fetchall():
+            if niv == "CLASSE":
+                classes_ok.add(code_n.upper())
+            elif niv == "FAMILLE":
+                familles_ok.add(code_n.upper())
+            elif niv == "SOUS_FAMILLE":
+                sf_ok.add(code_n.upper())
+
+        c.execute("""
+            SELECT UPPER(code_article)
+            FROM entite_exclusions_articles
+            WHERE UPPER(type_entite) = ? AND UPPER(code_entite) = ?
+        """, (te, ce))
+        articles_exclus = {itemgetter(0)(r) for r in c.fetchall()}
+        return classes_ok, familles_ok, sf_ok, articles_exclus
+    finally:
+        conn.close()
+
+def enregistrer_config_autorisations_entite(type_entite, code_entite, classes_ok, familles_ok, sf_ok, articles_exclus):
+    """Enregistre la configuration complète des autorisations et exclusions d'un fournisseur ou département."""
+    conn = get_connection()
+    te = type_entite.strip().upper()
+    ce = code_entite.strip().upper()
+    try:
+        c = conn.cursor()
+        c.execute("DELETE FROM entite_autorisations_nomenclature WHERE UPPER(type_entite) = ? AND UPPER(code_entite) = ?", (te, ce))
+        c.execute("DELETE FROM entite_exclusions_articles WHERE UPPER(type_entite) = ? AND UPPER(code_entite) = ?", (te, ce))
+
+        for cl in classes_ok:
+            c.execute("INSERT INTO entite_autorisations_nomenclature VALUES (?, ?, 'CLASSE', ?)", (te, ce, cl.upper()))
+        for fam in familles_ok:
+            c.execute("INSERT INTO entite_autorisations_nomenclature VALUES (?, ?, 'FAMILLE', ?)", (te, ce, fam.upper()))
+        for sf in sf_ok:
+            c.execute("INSERT INTO entite_autorisations_nomenclature VALUES (?, ?, 'SOUS_FAMILLE', ?)", (te, ce, sf.upper()))
+        for ca in articles_exclus:
+            c.execute("INSERT INTO entite_exclusions_articles VALUES (?, ?, ?)", (te, ce, ca.upper()))
+
+        conn.commit()
+        return True, "Paramétrage des autorisations enregistré avec succès."
+    except Exception as e:
+        return False, f"Erreur : {e}"
+    finally:
+        conn.close()
+
+def filtrer_articles_autorises(articles_complets, type_entite, code_entite):
+    """
+    Filtre en mémoire (< 0,005s) la liste `articles_complets` selon les règles de l'entité.
+    Si aucune restriction n'est définie pour cette entité, retourne tous les articles actifs.
+    Structure attendue d'un tuple article dans `articles_complets` :
+    (0:code, 1:designation, 2:classe, 3:famille, 4:sous_famille, 5:sf_lib, 6:unite, 7:prix_achat, 8:tva, ...)
+    """
+    if not code_entite:
+        return articles_complets
+    classes_ok, familles_ok, sf_ok, articles_exclus = lire_config_autorisations_entite(type_entite, code_entite)
+    if not classes_ok and not familles_ok and not sf_ok and not articles_exclus:
+        return articles_complets
+
+    resultat = []
+    for a in articles_complets:
+        ca_u = str(itemgetter(0)(a)).upper()
+        if ca_u in articles_exclus:
+            continue
+        cl_u = str(itemgetter(2)(a) or "").upper()
+        fam_u = str(itemgetter(3)(a) or "").upper()
+        sf_u = str(itemgetter(4)(a) or "").upper()
+
+        # Si des sous-familles sont cochées, on vérifie en priorité
+        if sf_ok:
+            if sf_u in sf_ok:
+                resultat.append(a)
+        elif familles_ok:
+            if fam_u in familles_ok:
+                resultat.append(a)
+        elif classes_ok:
+            if cl_u in classes_ok:
+                resultat.append(a)
+        else:
+            # Uniquement des exclusions d'articles précises
+            resultat.append(a)
+    return resultat

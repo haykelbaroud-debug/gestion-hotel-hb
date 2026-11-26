@@ -2732,6 +2732,7 @@ def initialiser_autorisations_m8():
 
 def lire_config_autorisations_entite(type_entite, code_entite):
     """Retourne les listes de classes, familles, sous_familles autorisées et articles exclus pour une entité."""
+    initialiser_autorisations_m8()
     conn = sqlite3.connect(DB_NAME, timeout=30)
     te = type_entite.strip().upper()
     ce = code_entite.strip().upper()

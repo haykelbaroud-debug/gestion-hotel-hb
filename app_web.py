@@ -915,8 +915,8 @@ elif menu == "🗂️ Base de données":
                     else:
                         st.error(f"Erreur lors de l'injection : {res_ba}")
 elif menu == "🧾 Achats & Mouvements":
-    from operator import itemgetter
-    from datetime import date
+      from operator import itemgetter
+      from datetime import date
 
     atab1, atab2, atab3, atab4, atab5, atab6 = st.tabs([
         "📝 Bon de Commande",

@@ -700,9 +700,10 @@ elif menu == "⚙️ Paramétrage de base":
         lib_fam = {str(itemgetter(0)(r)).strip().upper(): str(itemgetter(1)(r) or itemgetter(0)(r)).strip() for r in rows_fam if r}
         lib_sf = {str(itemgetter(0)(r)).strip().upper(): str(itemgetter(1)(r) or itemgetter(0)(r)).strip() for r in rows_sf if r}
 
-        lib_cl = {str(r).strip().upper(): str(r or r).strip() for r in rows_cl if r}
-        lib_fam = {str(r).strip().upper(): str(r or r).strip() for r in rows_fam if r}
-        lib_sf = {str(r).strip().upper(): str(r or r).strip() for r in rows_sf if r}
+        lib_cl = {str(itemgetter(0)(r)).strip().upper(): str(itemgetter(1)(r) or itemgetter(0)(r)).strip() for r in rows_cl if r}
+        lib_fam = {str(itemgetter(0)(r)).strip().upper(): str(itemgetter(1)(r) or itemgetter(0)(r)).strip() for r in rows_fam if r}
+        lib_sf = {str(itemgetter(0)(r)).strip().upper(): str(itemgetter(1)(r) or itemgetter(0)(r)).strip() for r in rows_sf if r}
+
 
         cl_to_fam = {}
         for f_code, f_lib, c_parent in rows_fam:

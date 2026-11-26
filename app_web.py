@@ -674,117 +674,111 @@ elif menu == "⚙️ Paramétrage de base":
         cl_ok_act, fam_ok_act, sf_ok_act, art_exc_act = db.lire_config_autorisations_entite(type_ent_code, code_ent_sel)
         tous_art_m8 = _cache_articles_complets()
 
-                                       # Utilisation directe des fonctions officielles de nomenclature du Module 1
+                                               # Construction exacte de la hiérarchie réelle depuis les tables et les 9 757 articles
         rows_cl = db.lister_classes(seulement_actives=True)
         rows_fam = db.lister_familles(seulement_actives=True)
         rows_sf = db.lister_sous_familles(seulement_actives=True)
 
-        lib_cl = {str(itemgetter(0)(r)).strip().upper(): str(itemgetter(1)(r)).strip() for r in rows_cl}
-        lib_fam = {str(itemgetter(0)(r)).strip().upper(): str(itemgetter(1)(r)).strip() for r in rows_fam}
-        lib_sf = {str(itemgetter(0)(r)).strip().upper(): str(itemgetter(1)(r)).strip() for r in rows_sf}
+        nom_cl = {str(itemgetter(0)(r)).strip().upper(): str(itemgetter(1)(r)).strip() for r in rows_cl}
+        nom_fam = {str(itemgetter(0)(r)).strip().upper(): str(itemgetter(1)(r)).strip() for r in rows_fam}
+        nom_sf = {str(itemgetter(0)(r)).strip().upper(): str(itemgetter(1)(r)).strip() for r in rows_sf}
+
+        sf_vers_fam = {str(itemgetter(0)(r)).strip().upper(): str(itemgetter(2)(r)).strip().upper() for r in rows_sf}
+        fam_vers_cl = {str(itemgetter(0)(r)).strip().upper(): str(itemgetter(2)(r)).strip().upper() for r in rows_fam}
 
         cl_to_fam = {}
-        for r in rows_fam:
-            f_c = str(itemgetter(0)(r)).strip().upper()
-            c_c = str(itemgetter(2)(r)).strip().upper()
-            if c_c and f_c:
-                cl_to_fam.setdefault(c_c, set()).add(f_c)
-
         fam_to_sf = {}
-        for r in rows_sf:
-            s_c = str(itemgetter(0)(r)).strip().upper()
-            f_c = str(itemgetter(2)(r)).strip().upper()
-            if f_c and s_c:
-                fam_to_sf.setdefault(f_c, set()).add(s_c)
+        art_par_sf = {}
+        art_par_fam = {}
+        art_par_cl = {}
 
-        liste_cl_sorted = sorted(lib_cl.keys())
-        map_cl = {c: f"{c} - {lib_cl[c]}" for c in liste_cl_sorted}
+        for a in tous_art_m8:
+            sf_u = str(itemgetter(4)(a) or "").strip().upper()
+            fam_u = sf_vers_fam.get(sf_u, str(itemgetter(3)(a) or "").strip().upper())
+            cl_u = fam_vers_cl.get(fam_u, str(itemgetter(2)(a) or "").strip().upper())
+
+            if cl_u:
+                art_par_cl.setdefault(cl_u, []).append(a)
+                if fam_u:
+                    cl_to_fam.setdefault(cl_u, set()).add(fam_u)
+            if fam_u:
+                art_par_fam.setdefault(fam_u, []).append(a)
+                if sf_u:
+                    fam_to_sf.setdefault(f_u, set()).add(sf_u)
+            if sf_u:
+                art_par_sf.setdefault(sf_u, []).append(a)
+
+        liste_cl_sorted = sorted(art_par_cl.keys())
+        map_cl = {c: f"{c} - {nom_cl[c]}" if c in nom_cl and nom_cl[c].upper() != c else c for c in liste_cl_sorted}
 
         # 1. Classes AUTORISÉES
         def_cl = [c for c in cl_ok_act if c in map_cl]
         sel_classes = st.multiselect(
-            "1️⃣ Classes AUTORISÉES (sélectionnez les classes actives pour cette entité ; vide = toutes autorisées) :",
+            "1️⃣ Classes AUTORISÉES (sélectionnez les classes actives ; vide = toutes autorisées) :",
             liste_cl_sorted,
             default=def_cl,
             format_func=lambda x: map_cl[x],
             key=f"ms_cl_{type_ent_code}_{code_ent_sel}"
         )
 
-        # 2. Familles disponibles selon les classes choisies
+        # 2. Familles disponibles selon les classes cochées
         fam_dispo_set = set()
         for c in (sel_classes if sel_classes else liste_cl_sorted):
             fam_dispo_set.update(cl_to_fam.get(c, set()))
         fam_dispo = sorted(fam_dispo_set)
-        map_fam = {f: f"{f} - {lib_fam[f]}" for f in fam_dispo if f in lib_fam}
+        map_fam = {f: f"{f} - {nom_fam[f]}" if f in nom_fam and nom_fam[f].upper() != f else f for f in fam_dispo}
 
         def_fam = [f for f in fam_ok_act if f in fam_dispo]
         sel_familles = st.multiselect(
             "2️⃣ Familles AUTORISÉES (optionnel : laissez vide pour garder toutes les familles des classes cochées) :",
             fam_dispo,
             default=def_fam,
-            format_func=lambda x: map_fam.get(x, x),
+            format_func=lambda x: map_fam[x],
             key=f"ms_fam_{type_ent_code}_{code_ent_sel}"
         )
 
-        # 3. Sous-Familles disponibles selon les familles ou classes choisies
+        # 3. Sous-Familles disponibles selon les familles ou classes cochées
         sf_dispo_set = set()
-        fams_cibles = sel_familles if sel_familles else fam_dispo
-        for f in fams_cibles:
+        for f in (sel_familles if sel_familles else fam_dispo):
             sf_dispo_set.update(fam_to_sf.get(f, set()))
         sf_dispo = sorted(sf_dispo_set)
-        map_sf = {s: f"{s} - {lib_sf[s]}" for s in sf_dispo if s in lib_sf}
+        map_sf = {s: f"{s} - {nom_sf[s]}" if s in nom_sf and nom_sf[s].upper() != s else s for s in sf_dispo}
 
         def_sf = [s for s in sf_ok_act if s in sf_dispo]
         sel_sf = st.multiselect(
-            "3️⃣ Sous-Familles AUTORISÉES (optionnel : ne sélectionnez que celles que vous autorisez, les autres seront désactivées) :",
+            "3️⃣ Sous-Familles AUTORISÉES (optionnel : ne sélectionnez que celles autorisées, les autres seront désactivées) :",
             sf_dispo,
             default=def_sf,
-            format_func=lambda x: map_sf.get(x, x),
+            format_func=lambda x: map_sf[x],
             key=f"ms_sf_{type_ent_code}_{code_ent_sel}"
         )
+
         # 4. Articles précis à DÉSACTIVER / EXCLURE
         articles_eligibles = []
-        for a in tous_art_m8:
-            sf_u = str(itemgetter(4)(a) or "").strip().upper()
-            fam_u = next((f for f, sfs in fam_to_sf.items() if sf_u in sfs), str(itemgetter(3)(a) or "").strip().upper())
-            cl_u = next((c for c, fams in cl_to_fam.items() if fam_u in fams), str(itemgetter(2)(a) or "").strip().upper())
-            if sel_sf:
-                if sf_u in sel_sf:
-                    articles_eligibles.append(a)
-            elif sel_familles:
-                if fam_u in sel_familles:
-                    articles_eligibles.append(a)
-            elif sel_classes:
-                if cl_u in sel_classes:
-                    articles_eligibles.append(a)
+        if sel_sf:
+            for s in sel_sf:
+                articles_eligibles.extend(art_par_sf.get(s, []))
+        elif sel_familles:
+            for f in sel_familles:
+                articles_eligibles.extend(art_par_fam.get(f, []))
+        elif sel_classes:
+            for c in sel_classes:
+                articles_eligibles.extend(art_par_cl.get(c, []))
+        else:
+            articles_eligibles = tous_art_m8
 
-        sel_exclus = []
-        if articles_eligibles:
-            map_art_m8 = {
-                itemgetter(0)(a).upper(): f"{itemgetter(0)(a)} - {itemgetter(1)(a)} [{itemgetter(4)(a)}]"
-                for a in articles_eligibles
-            }
-            def_exc = [c for c in art_exc_act if c in map_art_m8]
-            sel_exclus = st.multiselect(
-                f"4️⃣ Articles précis à DÉSACTIVER / EXCLURE temporairement ({len(articles_eligibles)} articles dans la sélection) :",
-                list(map_art_m8.keys()),
-                default=def_exc,
-                format_func=lambda x: map_art_m8[x],
-                key=f"ms_exc_{type_ent_code}_{code_ent_sel}"
-            )
-        elif not sel_classes and not sel_familles and not sel_sf:
-            map_art_all = {
-                itemgetter(0)(a).upper(): f"{itemgetter(0)(a)} - {itemgetter(1)(a)}"
-                for a in tous_art_m8
-            }
-            def_exc = [c for c in art_exc_act if c in map_art_all]
-            sel_exclus = st.multiselect(
-                "4️⃣ Articles précis à DÉSACTIVER / EXCLURE (toutes classes actives) :",
-                list(map_art_all.keys()),
-                default=def_exc,
-                format_func=lambda x: map_art_all[x],
-                key=f"ms_exc_all_{type_ent_code}_{code_ent_sel}"
-            )
+        map_art_m8 = {
+            itemgetter(0)(a).upper(): f"{itemgetter(0)(a)} - {itemgetter(1)(a)} [{nom_sf.get(str(itemgetter(4)(a) or '').strip().upper(), itemgetter(4)(a))}]"
+            for a in articles_eligibles
+        }
+        def_exc = [c for c in art_exc_act if c in map_art_m8]
+        sel_exclus = st.multiselect(
+            f"4️⃣ Articles précis à DÉSACTIVER / EXCLURE ({len(articles_eligibles)} articles dans la sélection) :",
+            list(map_art_m8.keys()),
+            default=def_exc,
+            format_func=lambda x: map_art_m8[x],
+            key=f"ms_exc_{type_ent_code}_{code_ent_sel}"
+        )
 
         col_b1, col_b2 = st.columns(2)
         if col_b1.button("💾 Enregistrer ce paramétrage", type="primary", key="btn_save_m8"):

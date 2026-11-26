@@ -766,12 +766,9 @@ elif menu == "⚙️ Paramétrage de base":
         # 4. Articles précis à DÉSACTIVER / EXCLURE
         articles_eligibles = []
         for a in tous_art_m8:
-            raw_cl = str(itemgetter(2)(a) or "").strip().upper()
-            raw_fam = str(itemgetter(3)(a) or "").strip().upper()
             sf_u = str(itemgetter(4)(a) or "").strip().upper()
-            cl_u = raw_cl if raw_cl in lib_cl else lib_to_code_cl.get(raw_cl, raw_cl)
-            fam_u = raw_fam if raw_fam in lib_fam else lib_to_code_fam.get(raw_fam, raw_fam)
-
+            fam_u = next((f for f, sfs in fam_to_sf.items() if sf_u in sfs), str(itemgetter(3)(a) or "").strip().upper())
+            cl_u = next((c for c, fams in cl_to_fam.items() if fam_u in fams), str(itemgetter(2)(a) or "").strip().upper())
             if sel_sf:
                 if sf_u in sel_sf:
                     articles_eligibles.append(a)

@@ -914,7 +914,7 @@ elif menu == "🗂️ Base de données":
                         st.success(f"Injection réussie !\n- **{n_cl}** nouvelles Classes\n- **{n_fam}** nouvelles Familles\n- **{n_sf}** nouvelles Sous-Familles\n- **{n_art}** Articles injectés")
                     else:
                         st.error(f"Erreur lors de l'injection : {res_ba}")
-    elif menu == "🧾 Achats & Mouvements":
+elif menu == "🧾 Achats & Mouvements":
     from operator import itemgetter
     from datetime import date
 

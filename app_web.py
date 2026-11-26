@@ -25,18 +25,21 @@ def _demarrer_base_une_seule_fois():
 
 _demarrer_base_une_seule_fois()
 
-@st.cache_data(ttl=120)
-def _cache_articles():
-    return db.lister_articles()
+@st.cache_data(ttl=300)
+def _cache_articles_complets():
+    return db.lister_articles_complet(seulement_actifs=True)
 
-@st.cache_data(ttl=120)
+@st.cache_data(ttl=300)
 def _cache_fournisseurs():
-    return db.lister_fournisseurs()
+    return db.lister_fournisseurs(seulement_actifs=True)
+
+@st.cache_data(ttl=300)
+def _cache_depts_achats():
+    return db.lister_depts_achats()
 
 @st.cache_data(ttl=300)
 def _cache_depts_actifs():
     return db.lister_departements_complet(seulement_actifs=True)
-
 def generer_excel_memoire(titre, entetes, lignes):
     import openpyxl
     from openpyxl.styles import Font, PatternFill, Alignment

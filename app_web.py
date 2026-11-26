@@ -678,11 +678,11 @@ elif menu == "⚙️ Paramétrage de base":
         conn_nom = db.get_connection()
         c_nom = conn_nom.cursor()
 
-        def _lire_table_nom(tbl_name, mot_parent=None):
+                def _lire_table_nom(tbl_name, mot_parent=None):
             c_nom.execute(f"PRAGMA table_info({tbl_name})")
-            cols = [r for r in c_nom.fetchall()]
-            col_code = next((c for c in cols if c.lower() == "code"), cols)
-            col_lib = next((c for c in cols if c.lower() in ("libelle", "nom", "designation", "intitule")), cols if len(cols) > 1 else col_code)
+            cols = [itemgetter(1)(r) for r in c_nom.fetchall()]
+            col_code = next((c for c in cols if c.lower() == "code"), cols[0])
+            col_lib = next((c for c in cols if c.lower() in ("libelle", "nom", "designation", "intitule")), cols[1] if len(cols) > 1 else col_code)
             if mot_parent:
                 col_par = next((c for c in cols if mot_parent in c.lower()), cols[-1])
                 c_nom.execute(f"SELECT {col_code}, {col_lib}, {col_par} FROM {tbl_name}")
@@ -694,6 +694,10 @@ elif menu == "⚙️ Paramétrage de base":
         rows_fam = _lire_table_nom("familles", "classe")
         rows_sf = _lire_table_nom("sous_familles", "famille")
         conn_nom.close()
+
+        lib_cl = {str(itemgetter(0)(r)).strip().upper(): str(itemgetter(1)(r) or itemgetter(0)(r)).strip() for r in rows_cl if r}
+        lib_fam = {str(itemgetter(0)(r)).strip().upper(): str(itemgetter(1)(r) or itemgetter(0)(r)).strip() for r in rows_fam if r}
+        lib_sf = {str(itemgetter(0)(r)).strip().upper(): str(itemgetter(1)(r) or itemgetter(0)(r)).strip() for r in rows_sf if r}
 
         lib_cl = {str(r).strip().upper(): str(r or r).strip() for r in rows_cl if r}
         lib_fam = {str(r).strip().upper(): str(r or r).strip() for r in rows_fam if r}

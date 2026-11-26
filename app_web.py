@@ -674,63 +674,31 @@ elif menu == "⚙️ Paramétrage de base":
         cl_ok_act, fam_ok_act, sf_ok_act, art_exc_act = db.lire_config_autorisations_entite(type_ent_code, code_ent_sel)
         tous_art_m8 = _cache_articles_complets()
 
-                               # Construction propre de la hiérarchie depuis SQLite
-        conn_nom = db.get_connection()
-        c_nom = conn_nom.cursor()
-        c_nom.execute("SELECT * FROM classes")
-        raw_cl = c_nom.fetchall()
-        c_nom.execute("SELECT * FROM familles")
-        raw_fam = c_nom.fetchall()
-        c_nom.execute("SELECT * FROM sous_familles")
-        raw_sf = c_nom.fetchall()
-        conn_nom.close()
+                                       # Utilisation directe des fonctions officielles de nomenclature du Module 1
+        rows_cl = db.lister_classes(seulement_actives=True)
+        rows_fam = db.lister_familles(seulement_actives=True)
+        rows_sf = db.lister_sous_familles(seulement_actives=True)
 
-        # classes: (code, libelle)
-        lib_cl = {str(itemgetter(0)(r)).strip().upper(): str(itemgetter(1)(r) or itemgetter(0)(r)).strip() for r in raw_cl if r}
-        lib_to_code_cl = {v.upper(): k for k, v in lib_cl.items()}
+        lib_cl = {str(itemgetter(0)(r)).strip().upper(): str(itemgetter(1)(r)).strip() for r in rows_cl}
+        lib_fam = {str(itemgetter(0)(r)).strip().upper(): str(itemgetter(1)(r)).strip() for r in rows_fam}
+        lib_sf = {str(itemgetter(0)(r)).strip().upper(): str(itemgetter(1)(r)).strip() for r in rows_sf}
 
-        # familles: si len==3 -> (code, libelle, code_classe) ou (code, code_classe, libelle)
-        lib_fam = {}
         cl_to_fam = {}
-        for r in raw_fam:
-            if not r:
-                continue
-            f_code = str(itemgetter(0)(r)).strip().upper()
-            v1 = str(itemgetter(1)(r) or "").strip()
-            v2 = str(itemgetter(2)(r) or "").strip() if len(r) > 2 else ""
-            # Détecter lequel de v1 ou v2 est la classe parente
-            if v1.upper() in lib_cl or v1.upper() in lib_to_code_cl:
-                c_par_raw, f_nom = v1.upper(), (v2 or f_code)
-            else:
-                f_nom, c_par_raw = (v1 or f_code), v2.upper()
-            lib_fam[f_code] = f_nom
-            c_u = c_par_raw if c_par_raw in lib_cl else lib_to_code_cl.get(c_par_raw, c_par_raw)
-            if c_u:
-                cl_to_fam.setdefault(c_u, set()).add(f_code)
+        for r in rows_fam:
+            f_c = str(itemgetter(0)(r)).strip().upper()
+            c_c = str(itemgetter(2)(r)).strip().upper()
+            if c_c and f_c:
+                cl_to_fam.setdefault(c_c, set()).add(f_c)
 
-        lib_to_code_fam = {v.upper(): k for k, v in lib_fam.items()}
-
-        # sous_familles: (code, libelle, code_famille) ou (code, code_famille, libelle)
-        lib_sf = {}
         fam_to_sf = {}
-        for r in raw_sf:
-            if not r:
-                continue
-            s_code = str(itemgetter(0)(r)).strip().upper()
-            v1 = str(itemgetter(1)(r) or "").strip()
-            v2 = str(itemgetter(2)(r) or "").strip() if len(r) > 2 else ""
-            if v1.upper() in lib_fam or v1.upper() in lib_to_code_fam:
-                f_par_raw, s_nom = v1.upper(), (v2 or s_code)
-            else:
-                s_nom, f_par_raw = (v1 or s_code), v2.upper()
-            lib_sf[s_code] = s_nom
-            f_u = f_par_raw if f_par_raw in lib_fam else lib_to_code_fam.get(f_par_raw, f_par_raw)
-            if f_u:
-                fam_to_sf.setdefault(f_u, set()).add(s_code)
+        for r in rows_sf:
+            s_c = str(itemgetter(0)(r)).strip().upper()
+            f_c = str(itemgetter(2)(r)).strip().upper()
+            if f_c and s_c:
+                fam_to_sf.setdefault(f_c, set()).add(s_c)
 
         liste_cl_sorted = sorted(lib_cl.keys())
-        map_cl = {c: f"{c} - {lib_cl[c]}" if lib_cl[c].upper() != c else c for c in liste_cl_sorted}
-
+        map_cl = {c: f"{c} - {lib_cl[c]}" for c in liste_cl_sorted}
 
         # 1. Classes AUTORISÉES
         def_cl = [c for c in cl_ok_act if c in map_cl]
@@ -747,14 +715,14 @@ elif menu == "⚙️ Paramétrage de base":
         for c in (sel_classes if sel_classes else liste_cl_sorted):
             fam_dispo_set.update(cl_to_fam.get(c, set()))
         fam_dispo = sorted(fam_dispo_set)
-        map_fam = {f: f"{f} - {lib_fam[f]}" if f in lib_fam and lib_fam[f].upper() != f else f for f in fam_dispo}
+        map_fam = {f: f"{f} - {lib_fam[f]}" for f in fam_dispo if f in lib_fam}
 
         def_fam = [f for f in fam_ok_act if f in fam_dispo]
         sel_familles = st.multiselect(
             "2️⃣ Familles AUTORISÉES (optionnel : laissez vide pour garder toutes les familles des classes cochées) :",
             fam_dispo,
             default=def_fam,
-            format_func=lambda x: map_fam[x],
+            format_func=lambda x: map_fam.get(x, x),
             key=f"ms_fam_{type_ent_code}_{code_ent_sel}"
         )
 
@@ -764,14 +732,14 @@ elif menu == "⚙️ Paramétrage de base":
         for f in fams_cibles:
             sf_dispo_set.update(fam_to_sf.get(f, set()))
         sf_dispo = sorted(sf_dispo_set)
-        map_sf = {s: f"{s} - {lib_sf[s]}" if s in lib_sf and lib_sf[s].upper() != s else s for s in sf_dispo}
+        map_sf = {s: f"{s} - {lib_sf[s]}" for s in sf_dispo if s in lib_sf}
 
         def_sf = [s for s in sf_ok_act if s in sf_dispo]
         sel_sf = st.multiselect(
             "3️⃣ Sous-Familles AUTORISÉES (optionnel : ne sélectionnez que celles que vous autorisez, les autres seront désactivées) :",
             sf_dispo,
             default=def_sf,
-            format_func=lambda x: map_sf[x],
+            format_func=lambda x: map_sf.get(x, x),
             key=f"ms_sf_{type_ent_code}_{code_ent_sel}"
         )
         # 4. Articles précis à DÉSACTIVER / EXCLURE

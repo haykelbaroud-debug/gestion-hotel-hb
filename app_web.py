@@ -682,7 +682,7 @@ elif menu == "⚙️ Paramétrage de base":
             c_nom.execute(f"PRAGMA table_info({tbl_name})")
             cols = [itemgetter(1)(r) for r in c_nom.fetchall()]
             col_code = next((c for c in cols if c.lower() == "code"), cols[0])
-            col_lib = next((c for c in cols if c.lower() in ("libelle", "nom", "designation", "intitule")), cols[1] if len(cols) > 1 else col_code)
+            col_lib = next((c for c in cols if any(k in c.lower() for k in ("libelle", "nom", "designation", "intitule"))), col_code)
             if mot_parent:
                 col_par = next((c for c in cols if mot_parent in c.lower()), cols[-1])
                 c_nom.execute(f"SELECT {col_code}, {col_lib}, {col_par} FROM {tbl_name}")
@@ -690,35 +690,32 @@ elif menu == "⚙️ Paramétrage de base":
                 c_nom.execute(f"SELECT {col_code}, {col_lib} FROM {tbl_name}")
             return c_nom.fetchall()
 
-
         rows_cl = _lire_table_nom("classes")
         rows_fam = _lire_table_nom("familles", "classe")
         rows_sf = _lire_table_nom("sous_familles", "famille")
         conn_nom.close()
 
         lib_cl = {str(itemgetter(0)(r)).strip().upper(): str(itemgetter(1)(r) or itemgetter(0)(r)).strip() for r in rows_cl if r}
+        lib_to_code_cl = {v.upper(): k for k, v in lib_cl.items()}
         lib_fam = {str(itemgetter(0)(r)).strip().upper(): str(itemgetter(1)(r) or itemgetter(0)(r)).strip() for r in rows_fam if r}
+        lib_to_code_fam = {v.upper(): k for k, v in lib_fam.items()}
         lib_sf = {str(itemgetter(0)(r)).strip().upper(): str(itemgetter(1)(r) or itemgetter(0)(r)).strip() for r in rows_sf if r}
-
-        lib_cl = {str(itemgetter(0)(r)).strip().upper(): str(itemgetter(1)(r) or itemgetter(0)(r)).strip() for r in rows_cl if r}
-        lib_fam = {str(itemgetter(0)(r)).strip().upper(): str(itemgetter(1)(r) or itemgetter(0)(r)).strip() for r in rows_fam if r}
-        lib_sf = {str(itemgetter(0)(r)).strip().upper(): str(itemgetter(1)(r) or itemgetter(0)(r)).strip() for r in rows_sf if r}
-
 
         cl_to_fam = {}
         for f_code, f_lib, c_parent in rows_fam:
-            c_u = str(c_parent or "").strip().upper()
+            raw_c = str(c_parent or "").strip().upper()
+            c_u = raw_c if raw_c in lib_cl else lib_to_code_cl.get(raw_c, raw_c)
             f_u = str(f_code or "").strip().upper()
             if c_u and f_u:
                 cl_to_fam.setdefault(c_u, set()).add(f_u)
 
         fam_to_sf = {}
         for s_code, s_lib, f_parent in rows_sf:
-            f_u = str(f_parent or "").strip().upper()
+            raw_f = str(f_parent or "").strip().upper()
+            f_u = raw_f if raw_f in lib_fam else lib_to_code_fam.get(raw_f, raw_f)
             s_u = str(s_code or "").strip().upper()
             if f_u and s_u:
                 fam_to_sf.setdefault(f_u, set()).add(s_u)
-
         liste_cl_sorted = sorted(lib_cl.keys())
         map_cl = {c: f"{c} - {lib_cl[c]}" if lib_cl[c].upper() != c else c for c in liste_cl_sorted}
 

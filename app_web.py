@@ -676,9 +676,9 @@ elif menu == "⚙️ Paramétrage de base":
 
                         # Construction 100% dynamique de la hiérarchie depuis SQLite (codes + libellés réels)
         conn_nom = db.get_connection()
-        c_nom = conn_nom.cursor()
+                c_nom = conn_nom.cursor()
 
-                def _lire_table_nom(tbl_name, mot_parent=None):
+        def _lire_table_nom(tbl_name, mot_parent=None):
             c_nom.execute(f"PRAGMA table_info({tbl_name})")
             cols = [itemgetter(1)(r) for r in c_nom.fetchall()]
             col_code = next((c for c in cols if c.lower() == "code"), cols[0])
@@ -689,6 +689,7 @@ elif menu == "⚙️ Paramétrage de base":
             else:
                 c_nom.execute(f"SELECT {col_code}, {col_lib} FROM {tbl_name}")
             return c_nom.fetchall()
+
 
         rows_cl = _lire_table_nom("classes")
         rows_fam = _lire_table_nom("familles", "classe")

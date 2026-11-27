@@ -643,9 +643,21 @@ elif menu == "⚙️ Paramétrage de base":
                 st.dataframe(df_sf, use_container_width=True, hide_index=True)
             else:
                 st.info("Aucune sous-famille enregistrée.")
-        st.divider()
+            st.divider()
+    with st.expander("🧹 Outil de remise au propre de la Nomenclature (Classes 01..14 & Familles)", expanded=False):
+        st.info("Fusionne les classes doublons (ex: 22 -> 02 ALIMENTATION, 33 -> 03, 44 -> 04) et remplace les libellés 'BIENS' des familles par leurs vrais noms sans toucher à vos 9 757 articles.")
+        if st.button("🔧 Nettoyer et unifier la nomenclature maintenant", key="btn_clean_nom"):
+            ok_n, msg_n = db.nettoyer_et_restaurer_nomenclature()
+            if ok_n:
+                st.cache_data.clear()
+                st.success(msg_n)
+                st.rerun()
+            else:
+                st.error(msg_n)
+
+      st.divider()
     st.subheader("🔐 Autorisations par Classe, Famille, Sous-Famille & Article")
-    st.info("Cochez uniquement les Classes, Familles ou Sous-Familles AUTORISÉES pour ce Fournisseur ou Département (tout ce qui n'est pas coché sera masqué en saisie), puis décochez les articles précis à exclure.")
+    st.info("Sélectionnez les Classes, Familles ou Sous-Familles AUTORISÉES pour ce Fournisseur ou Département (vide = tout autorisé), puis décochez les articles précis à exclure.")
 
     type_ent_sel = st.radio(
         "Type d'entité à paramétrer :",
@@ -674,7 +686,7 @@ elif menu == "⚙️ Paramétrage de base":
         cl_ok_act, fam_ok_act, sf_ok_act, art_exc_act = db.lire_config_autorisations_entite(type_ent_code, code_ent_sel)
         tous_art_m8 = _cache_articles_complets()
 
-                                               # Construction exacte de la hiérarchie réelle depuis les tables et les 9 757 articles
+        # Lecture des tables officielles (Classes, Familles, Sous-Familles)
         rows_cl = db.lister_classes(seulement_actives=True)
         rows_fam = db.lister_familles(seulement_actives=True)
         rows_sf = db.lister_sous_familles(seulement_actives=True)
@@ -683,77 +695,82 @@ elif menu == "⚙️ Paramétrage de base":
         nom_fam = {str(itemgetter(0)(r)).strip().upper(): str(itemgetter(1)(r)).strip() for r in rows_fam}
         nom_sf = {str(itemgetter(0)(r)).strip().upper(): str(itemgetter(1)(r)).strip() for r in rows_sf}
 
-        sf_vers_fam = {str(itemgetter(0)(r)).strip().upper(): str(itemgetter(2)(r)).strip().upper() for r in rows_sf}
-        fam_vers_cl = {str(itemgetter(0)(r)).strip().upper(): str(itemgetter(2)(r)).strip().upper() for r in rows_fam}
-
         cl_to_fam = {}
+        for r in rows_fam:
+            f_c = str(itemgetter(0)(r)).strip().upper()
+            c_c = str(itemgetter(2)(r)).strip().upper()
+            if c_c and f_c:
+                cl_to_fam.setdefault(c_c, set()).add(f_c)
+
         fam_to_sf = {}
-        art_par_sf = {}
-        art_par_fam = {}
+        for r in rows_sf:
+            s_c = str(itemgetter(0)(r)).strip().upper()
+            f_c = str(itemgetter(2)(r)).strip().upper()
+            if f_c and s_c:
+                fam_to_sf.setdefault(f_c, set()).add(s_c)
+
+        # Indexation des articles selon leur structure réelle :
+        # (0:code, 1:designation, 2:sous_famille, 3:sf_lib, 4:famille, 5:classe)
         art_par_cl = {}
-
+        art_par_fam = {}
+        art_par_sf = {}
         for a in tous_art_m8:
-            sf_u = str(itemgetter(4)(a) or "").strip().upper()
-            fam_u = sf_vers_fam.get(sf_u, str(itemgetter(3)(a) or "").strip().upper())
-            cl_u = fam_vers_cl.get(fam_u, str(itemgetter(2)(a) or "").strip().upper())
-
+            sf_u = str(itemgetter(2)(a) or "").strip().upper()
+            fam_u = str(itemgetter(4)(a) or "").strip().upper()
+            cl_u = str(itemgetter(5)(a) or "").strip().upper()
             if cl_u:
                 art_par_cl.setdefault(cl_u, []).append(a)
-                if fam_u:
-                    cl_to_fam.setdefault(cl_u, set()).add(fam_u)
             if fam_u:
                 art_par_fam.setdefault(fam_u, []).append(a)
-                if sf_u:
-                    fam_to_sf.setdefault(fam_u, set()).add(sf_u)
             if sf_u:
                 art_par_sf.setdefault(sf_u, []).append(a)
 
-        liste_cl_sorted = sorted(art_par_cl.keys())
-        map_cl = {c: f"{c} - {nom_cl[c]}" if c in nom_cl and nom_cl[c].upper() != c else c for c in liste_cl_sorted}
+        liste_cl_sorted = sorted(nom_cl.keys())
+        map_cl = {c: f"{c} - {nom_cl[c]}" for c in liste_cl_sorted}
 
         # 1. Classes AUTORISÉES
         def_cl = [c for c in cl_ok_act if c in map_cl]
         sel_classes = st.multiselect(
-            "1️⃣ Classes AUTORISÉES (sélectionnez les classes actives ; vide = toutes autorisées) :",
+            "1️⃣ Classes AUTORISÉES (vide = toutes autorisées) :",
             liste_cl_sorted,
             default=def_cl,
             format_func=lambda x: map_cl[x],
             key=f"ms_cl_{type_ent_code}_{code_ent_sel}"
         )
 
-        # 2. Familles disponibles selon les classes cochées
+        # 2. Familles disponibles selon les classes choisies
         fam_dispo_set = set()
         for c in (sel_classes if sel_classes else liste_cl_sorted):
             fam_dispo_set.update(cl_to_fam.get(c, set()))
         fam_dispo = sorted(fam_dispo_set)
-        map_fam = {f: f"{f} - {nom_fam[f]}" if f in nom_fam and nom_fam[f].upper() != f else f for f in fam_dispo}
+        map_fam = {f: f"{f} - {nom_fam.get(f, f)}" for f in fam_dispo}
 
         def_fam = [f for f in fam_ok_act if f in fam_dispo]
         sel_familles = st.multiselect(
-            "2️⃣ Familles AUTORISÉES (optionnel : laissez vide pour garder toutes les familles des classes cochées) :",
+            "2️⃣ Familles AUTORISÉES (optionnel : affine les classes choisies) :",
             fam_dispo,
             default=def_fam,
             format_func=lambda x: map_fam[x],
             key=f"ms_fam_{type_ent_code}_{code_ent_sel}"
         )
 
-        # 3. Sous-Familles disponibles selon les familles ou classes cochées
+        # 3. Sous-Familles disponibles selon les familles ou classes choisies
         sf_dispo_set = set()
         for f in (sel_familles if sel_familles else fam_dispo):
             sf_dispo_set.update(fam_to_sf.get(f, set()))
         sf_dispo = sorted(sf_dispo_set)
-        map_sf = {s: f"{s} - {nom_sf[s]}" if s in nom_sf and nom_sf[s].upper() != s else s for s in sf_dispo}
+        map_sf = {s: f"{s} - {nom_sf.get(s, s)}" if nom_sf.get(s, s).upper() != s else s for s in sf_dispo}
 
         def_sf = [s for s in sf_ok_act if s in sf_dispo]
         sel_sf = st.multiselect(
-            "3️⃣ Sous-Familles AUTORISÉES (optionnel : ne sélectionnez que celles autorisées, les autres seront désactivées) :",
+            "3️⃣ Sous-Familles AUTORISÉES (optionnel : ne sélectionnez que celles autorisées, ex. tout sauf OILF) :",
             sf_dispo,
             default=def_sf,
             format_func=lambda x: map_sf[x],
             key=f"ms_sf_{type_ent_code}_{code_ent_sel}"
         )
 
-        # 4. Articles précis à DÉSACTIVER / EXCLURE
+        # 4. Articles précis à DÉSACTIVER / EXCLURE (index 2 = sous_famille)
         articles_eligibles = []
         if sel_sf:
             for s in sel_sf:
@@ -768,7 +785,7 @@ elif menu == "⚙️ Paramétrage de base":
             articles_eligibles = tous_art_m8
 
         map_art_m8 = {
-            itemgetter(0)(a).upper(): f"{itemgetter(0)(a)} - {itemgetter(1)(a)} [{nom_sf.get(str(itemgetter(4)(a) or '').strip().upper(), itemgetter(4)(a))}]"
+            itemgetter(0)(a).upper(): f"{itemgetter(0)(a)} - {itemgetter(1)(a)} [{itemgetter(2)(a)}]"
             for a in articles_eligibles
         }
         def_exc = [c for c in art_exc_act if c in map_art_m8]

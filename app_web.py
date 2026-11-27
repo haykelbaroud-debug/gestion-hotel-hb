@@ -30,8 +30,9 @@ _demarrer_base_une_seule_fois()
 def _cache_articles_complets():
     return db.lister_articles_complet(seulement_actifs=True)
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=60)
 def _cache_fournisseurs():
+    db.activer_tous_fournisseurs_importes()
     return db.lister_fournisseurs(seulement_actifs=True)
 
 @st.cache_data(ttl=300)

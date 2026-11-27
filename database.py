@@ -2893,12 +2893,13 @@ def filtrer_articles_autorises(articles_complets, type_entite, code_entite):
         sf_u = str(itemgetter(2)(a) or "").strip().upper()
         sf_lib_u = str(itemgetter(3)(a) or "").strip().upper()
         fam_u = str(itemgetter(4)(a) or "").strip().upper() or sf_to_fam.get(sf_u, "") or sf_to_fam.get(sf_lib_u, "")
-        cl_u = (
-            str(itemgetter(5)(a) or "").strip().upper()
-            or fam_to_cl.get(fam_u, "")
-            or sf_to_cl.get(sf_u, "")
-            or sf_to_cl.get(sf_lib_u, "")
-        )
+                cl_art = str(itemgetter(5)(a) or "").strip().upper()
+        cl_parents_art = set()
+        if cl_art:
+            cl_parents_art.add(cl_art)
+        cl_parents_art.update(fam_to_cl.get(fam_u, set()))
+        cl_parents_art.update(sf_to_cl.get(sf_u, set()))
+        cl_parents_art.update(sf_to_cl.get(sf_lib_u, set()))
 
         if sf_ok:
             if (sf_u and sf_u in sf_cibles) or (sf_lib_u and sf_lib_u in sf_cibles):
@@ -2908,12 +2909,14 @@ def filtrer_articles_autorises(articles_complets, type_entite, code_entite):
                 resultat.append(a)
         elif classes_ok:
             if (
-                (cl_u and cl_u in cl_cibles)
+                bool(cl_parents_art & cl_cibles)
                 or (fam_u and fam_u in fam_cibles)
                 or (sf_u and sf_u in sf_cibles)
                 or (sf_lib_u and sf_lib_u in sf_cibles)
             ):
                 resultat.append(a)
+        else:
+            resultat.append(a)
         else:
             resultat.append(a)
 

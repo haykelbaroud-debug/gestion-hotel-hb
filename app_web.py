@@ -1150,13 +1150,20 @@ elif menu == "🧾 Achats & Mouvements":
                 articles_filtres = db.filtrer_articles_autorises(articles_actifs, "FOURNISSEUR", fourn_sel)
             else:
                 articles_filtres = db.filtrer_articles_autorises(articles_actifs, "DEPARTEMENT", dept_sel)
+
+            if not articles_filtres:
+                st.warning("⚠️ Aucun article n'est autorisé pour cette sélection. Vérifiez son paramétrage dans 'Paramétrage de base > Autorisations'.")
+                return
+
             map_art = {
-
-
                 itemgetter(0)(a): f"{itemgetter(0)(a)} - {itemgetter(1)(a)} ({itemgetter(6)(a)})"
                 for a in articles_filtres
             }
             dict_art_info = {itemgetter(0)(a): a for a in articles_filtres}
+
+            ca1, ca2, ca3, ca4 = st.columns([3, 1, 1, 1])
+            art_choisi = ca1.selectbox("Article :", list(map_art.keys()), format_func=lambda x: map_art[x], key=f"art_sel_{type_doc}")
+            info_a = dict_art_info[art_choisi]
 
             ca1, ca2, ca3, ca4 = st.columns([3, 1, 1, 1])
             art_choisi = ca1.selectbox("Article :", list(map_art.keys()), format_func=lambda x: map_art[x], key=f"art_sel_{type_doc}")

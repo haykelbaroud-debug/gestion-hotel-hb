@@ -2823,15 +2823,13 @@ def filtrer_articles_autorises(articles_complets, type_entite, code_entite):
 
 def nettoyer_et_restaurer_nomenclature():
     """
-    Remet au propre la hiérarchie Classes (01..14) -> Familles -> Sous-Familles :
-    1. Fusionne les classes doublons créées par l'import (ex: 22->02 ALIMENTATION, 33->03, 44->04...).
-    2. Remplace les libellés 'BIENS' des familles par leurs vrais noms (ex: VIAN,POISSO,POUL,CHAR...).
-    3. Rétablit les vraies sous-familles (WATR, MEAT, FISH, OILF...) liées à chaque article.
+    Remet au propre la hiérarchie exacte Classes (01..14) -> Familles -> Sous-Familles
+    à partir du référentiel officiel et des articles existants.
     """
     conn = get_connection()
     try:
         c = conn.cursor()
-        # 1. Correspondance officielle des classes de référence (01 à 14)
+        # 1. Référentiel officiel des classes (01 à 14)
         classes_ref = {
             "BOISSONS": "01",
             "ALIMENTATION": "02",
@@ -2852,28 +2850,57 @@ def nettoyer_et_restaurer_nomenclature():
             c.execute("INSERT OR IGNORE INTO classes (code, libelle, actif) VALUES (?, ?, 1)", (code_c, lib_c))
             c.execute("UPDATE classes SET libelle = ?, actif = 1 WHERE code = ?", (lib_c, code_c))
 
-        # 2. Rattacher toutes les familles aux codes classes officiels (01..14)
+        # Fusionner les classes doublons (ex: 22->02, 33->03, 44->04, 19...)
         c.execute("SELECT code, libelle FROM classes")
-        toutes_cl = {str(itemgetter(0)(r)).strip().upper(): str(itemgetter(1)(r)).strip().upper() for r in c.fetchall()}
-        for old_code, old_lib in toutes_cl.items():
-            if old_lib in classes_ref and old_code != classes_ref[old_lib]:
-                new_code = classes_ref[old_lib]
-                c.execute("UPDATE familles SET code_classe = ? WHERE UPPER(code_classe) = ?", (new_code, old_code))
-                c.execute("UPDATE articles SET classe = ? WHERE UPPER(classe) = ?", (new_code, old_code))
+        for old_code, old_lib in c.fetchall():
+            ol_u = str(old_lib or "").strip().upper()
+            oc_u = str(old_code or "").strip().upper()
+            if ol_u in classes_ref and oc_u != classes_ref[ol_u]:
+                new_c = classes_ref[ol_u]
+                c.execute("UPDATE familles SET code_classe = ? WHERE UPPER(code_classe) = ?", (new_c, oc_u))
+                c.execute("UPDATE articles SET classe = ? WHERE UPPER(classe) = ?", (new_c, oc_u))
                 c.execute("DELETE FROM classes WHERE code = ?", (old_code,))
 
-        # 3. Corriger les libellés 'BIENS' des familles à partir des sous-familles ou codes
-        c.execute("SELECT code, libelle, code_classe FROM familles")
-        for f_code, f_lib, f_cl in c.fetchall():
-            if str(f_lib or "").strip().upper() in ("BIENS", "SERVICE INCORPORABLE", ""):
-                # Si une seule sous-famille porte le nom de la famille, ou reprendre le premier libellé de sous-famille représentatif
-                c.execute("SELECT libelle FROM sous_familles WHERE UPPER(code_famille) = UPPER(?) ORDER BY code LIMIT 1", (f_code,))
-                r_sf = c.fetchone()
-                if r_sf and itemgetter(0)(r_sf):
-                    c.execute("UPDATE familles SET libelle = ? WHERE code = ?", (itemgetter(0)(r_sf), f_code))
+        # 2. Référentiel officiel Sous-Famille -> (Vraie Famille, Vraie Classe)
+        sf_vers_famille_ref = {
+            "WATR": ("BOISSONS NON ALCOOLIS", "01"), "SOFT": ("BOISSONS NON ALCOOLIS", "01"),
+            "BEER": ("BOISSONS ALCOOLISEES", "01"), "WHIW": ("BOISSONS ALCOOLISEES", "01"),
+            "ROSW": ("BOISSONS ALCOOLISEES", "01"), "REDW": ("BOISSONS ALCOOLISEES", "01"),
+            "SPAW": ("LIQUEUR", "01"), "INTS": ("LIQUEUR", "01"), "NATS": ("LIQUEUR", "01"),
+            "MEAT": ("VIAN,POISSO,POUL,CHAR", "02"), "FISH": ("VIAN,POISSO,POUL,CHAR", "02"),
+            "POUL": ("VIAN,POISSO,POUL,CHAR", "02"), "SAUS": ("VIAN,POISSO,POUL,CHAR", "02"),
+            "DAIR": ("AUTRES NOURRITURES", "02"), "EGGS": ("AUTRES NOURRITURES", "02"),
+            "THEC": ("AUTRES NOURRITURES", "02"), "MIXP": ("AUTRES NOURRITURES", "02"),
+            "BRKF": ("PATISSERIE", "02"), "PATI": ("PATISSERIE", "02"), "ICEC": ("PATISSERIE", "02"),
+            "VFRE": ("LEG & FRUITS", "02"), "VFRO": ("LEG & FRUITS", "02"), "VCAN": ("LEG & FRUITS", "02"),
+            "FFRE": ("LEG & FRUITS", "02"), "ORAN": ("LEG & FRUITS", "02"), "FFRO": ("LEG & FRUITS", "02"),
+            "FCAN": ("LEG & FRUITS", "02"), "DRYP": ("LEG & FRUITS", "02"),
+            "PAST": ("FARINE", "02"), "BRED": ("FARINE", "02"),
+            "OILF": ("GRAISSE ET HUILE", "02"),
+            "SAUC": ("EPICES", "02"),
+            "PRODUITS PISCINES": ("PRODUITS PISCINES", "10"),
+            "SEL INDUSTRIEL": ("SEL INDUSTRIEL", "10")
+        }
+
+        # Mettre à jour les libellés des familles depuis les sous-familles connues ou le libellé de sous-famille
+        c.execute("SELECT sf.code, sf.libelle, sf.code_famille, f.libelle FROM sous_familles sf LEFT JOIN familles f ON sf.code_famille = f.code")
+        for sf_c, sf_l, f_c, f_l in c.fetchall():
+            sf_u = str(sf_c or "").strip().upper()
+            if sf_u in sf_vers_famille_ref and f_c:
+                vrai_nom_fam, vrai_cl = sf_vers_famille_ref[sf_u]
+                c.execute("UPDATE familles SET libelle = ?, code_classe = ? WHERE code = ?", (vrai_nom_fam, vrai_cl, f_c))
+            elif f_c and str(f_l or "").strip().upper() in ("BIENS", "SERVICE INCORPORABLE", ""):
+                c.execute("UPDATE familles SET libelle = ? WHERE code = ?", (sf_l or sf_c, f_c))
+
+        # Nettoyer les anciennes classes vides sans aucune famille ni article
+        c.execute("""
+            DELETE FROM classes
+            WHERE code NOT IN (SELECT DISTINCT code_classe FROM familles WHERE code_classe IS NOT NULL)
+              AND code NOT IN (SELECT DISTINCT classe FROM articles WHERE classe IS NOT NULL)
+        """)
 
         conn.commit()
-        return True, "Nomenclature nettoyée : classes doublons fusionnées (01 à 14) et libellés des familles restaurés."
+        return True, "Nomenclature remise au propre : doublons supprimés et vrais libellés restaurés !"
     except Exception as e:
         return False, f"Erreur nettoyage : {e}"
     finally:

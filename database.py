@@ -2789,38 +2789,128 @@ def enregistrer_config_autorisations_entite(type_entite, code_entite, classes_ok
         conn.close()
 def filtrer_articles_autorises(articles_complets, type_entite, code_entite):
     """
-    Filtre instantanément (< 0,005s) `articles_complets` selon les autorisations de l'entité.
+    Filtre en lecture seule `articles_complets` selon les autorisations enregistrées
+    sans modifier la base ni utiliser de préfixes numériques ambigus.
     Ordre réel du tuple `lister_articles_complet`:
     (0:code, 1:designation, 2:sous_famille, 3:sf_lib, 4:famille, 5:classe, 6:unite, 7:prix_achat, 8:tva, 9:actif)
     """
     if not code_entite:
         return articles_complets
+
     classes_ok, familles_ok, sf_ok, articles_exclus = lire_config_autorisations_entite(type_entite, code_entite)
+    classes_ok = {str(x).strip().upper() for x in (classes_ok or []) if str(x).strip()}
+    familles_ok = {str(x).strip().upper() for x in (familles_ok or []) if str(x).strip()}
+    sf_ok = {str(x).strip().upper() for x in (sf_ok or []) if str(x).strip()}
+    articles_exclus = {str(x).strip().upper() for x in (articles_exclus or []) if str(x).strip()}
+
     if not classes_ok and not familles_ok and not sf_ok and not articles_exclus:
         return articles_complets
 
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("SELECT UPPER(TRIM(code)), UPPER(TRIM(libelle)) FROM classes")
+        rows_cl = c.fetchall()
+
+        c.execute("SELECT UPPER(TRIM(code)), UPPER(TRIM(libelle)), UPPER(TRIM(code_classe)) FROM familles")
+        rows_f = c.fetchall()
+
+        c.execute("SELECT UPPER(TRIM(code)), UPPER(TRIM(libelle)), UPPER(TRIM(code_famille)) FROM sous_familles")
+        rows_sf = c.fetchall()
+    finally:
+        conn.close()
+
+    # Correspondance code <-> libellé pour les classes
+    cl_code_to_lib = {code_c: lib_c for code_c, lib_c in rows_cl if code_c}
+    cl_lib_to_code = {lib_c: code_c for code_c, lib_c in rows_cl if lib_c}
+
+    cl_cibles = set(classes_ok)
+    for val in list(classes_ok):
+        if val in cl_code_to_lib and cl_code_to_lib[val]:
+            cl_cibles.add(cl_code_to_lib[val])
+        if val in cl_lib_to_code and cl_lib_to_code[val]:
+            cl_cibles.add(cl_lib_to_code[val])
+
+    # Liens réels Famille <-> Classe
+    fam_to_cl = {}
+    fam_cibles = set(familles_ok)
+    for f_code, f_lib, f_cl in rows_f:
+        if f_code:
+            fam_to_cl[f_code] = f_cl
+        if f_lib:
+            fam_to_cl[f_lib] = f_cl
+        if (f_code and f_code in familles_ok) or (f_lib and f_lib in familles_ok):
+            if f_code:
+                fam_cibles.add(f_code)
+            if f_lib:
+                fam_cibles.add(f_lib)
+        elif not familles_ok and not sf_ok and f_cl and f_cl in cl_cibles:
+            if f_code:
+                fam_cibles.add(f_code)
+            if f_lib:
+                fam_cibles.add(f_lib)
+
+    # Liens réels Sous-Famille <-> Famille / Classe
+    sf_to_fam = {}
+    sf_to_cl = {}
+    sf_cibles = set(sf_ok)
+    for s_code, s_lib, s_fam in rows_sf:
+        cl_parent = fam_to_cl.get(s_fam, "")
+        if s_code:
+            sf_to_fam[s_code] = s_fam
+            sf_to_cl[s_code] = cl_parent
+        if s_lib:
+            sf_to_fam[s_lib] = s_fam
+            sf_to_cl[s_lib] = cl_parent
+
+        if (s_code and s_code in sf_ok) or (s_lib and s_lib in sf_ok):
+            if s_code:
+                sf_cibles.add(s_code)
+            if s_lib:
+                sf_cibles.add(s_lib)
+        elif not sf_ok and (
+            (s_fam and s_fam in fam_cibles)
+            or (cl_parent and cl_parent in cl_cibles)
+        ):
+            if s_code:
+                sf_cibles.add(s_code)
+            if s_lib:
+                sf_cibles.add(s_lib)
+
     resultat = []
     for a in articles_complets:
-        ca_u = str(itemgetter(0)(a)).strip().upper()
+        ca_u = str(itemgetter(0)(a) or "").strip().upper()
         if ca_u in articles_exclus:
             continue
+
         sf_u = str(itemgetter(2)(a) or "").strip().upper()
-        fam_u = str(itemgetter(4)(a) or "").strip().upper()
-        cl_u = str(itemgetter(5)(a) or "").strip().upper()
+        sf_lib_u = str(itemgetter(3)(a) or "").strip().upper()
+        fam_u = str(itemgetter(4)(a) or "").strip().upper() or sf_to_fam.get(sf_u, "") or sf_to_fam.get(sf_lib_u, "")
+        cl_u = (
+            str(itemgetter(5)(a) or "").strip().upper()
+            or fam_to_cl.get(fam_u, "")
+            or sf_to_cl.get(sf_u, "")
+            or sf_to_cl.get(sf_lib_u, "")
+        )
 
         if sf_ok:
-            if sf_u in sf_ok:
+            if (sf_u and sf_u in sf_cibles) or (sf_lib_u and sf_lib_u in sf_cibles):
                 resultat.append(a)
         elif familles_ok:
-            if fam_u in familles_ok:
+            if (fam_u and fam_u in fam_cibles) or (sf_u and sf_u in sf_cibles) or (sf_lib_u and sf_lib_u in sf_cibles):
                 resultat.append(a)
         elif classes_ok:
-            if cl_u in classes_ok:
+            if (
+                (cl_u and cl_u in cl_cibles)
+                or (fam_u and fam_u in fam_cibles)
+                or (sf_u and sf_u in sf_cibles)
+                or (sf_lib_u and sf_lib_u in sf_cibles)
+            ):
                 resultat.append(a)
         else:
             resultat.append(a)
-    return resultat
 
+    return resultat
 def nettoyer_et_restaurer_nomenclature():
     """
     Remet au propre la hiérarchie exacte Classes (01..14) -> Familles -> Sous-Familles

@@ -1164,10 +1164,6 @@ elif menu == "🧾 Achats & Mouvements":
             ca1, ca2, ca3, ca4 = st.columns([3, 1, 1, 1])
             art_choisi = ca1.selectbox("Article :", list(map_art.keys()), format_func=lambda x: map_art[x], key=f"art_sel_{type_doc}")
             info_a = dict_art_info[art_choisi]
-
-            ca1, ca2, ca3, ca4 = st.columns([3, 1, 1, 1])
-            art_choisi = ca1.selectbox("Article :", list(map_art.keys()), format_func=lambda x: map_art[x], key=f"art_sel_{type_doc}")
-            info_a = dict_art_info[art_choisi]
             qte_saisie = ca2.number_input("Quantité :", min_value=0.001, value=1.0, step=1.0, format="%.3f", key=f"qte_{type_doc}")
             pu_saisi = ca3.number_input("Prix Unit. HT :", min_value=0.0, value=float(itemgetter(7)(info_a)), step=0.100, format="%.3f", key=f"pu_{type_doc}")
 

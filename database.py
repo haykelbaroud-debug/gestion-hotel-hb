@@ -2787,13 +2787,11 @@ def enregistrer_config_autorisations_entite(type_entite, code_entite, classes_ok
         return False, f"Erreur : {e}"
     finally:
         conn.close()
-
 def filtrer_articles_autorises(articles_complets, type_entite, code_entite):
     """
-    Filtre en mémoire (< 0,005s) la liste `articles_complets` selon les règles de l'entité.
-    Si aucune restriction n'est définie pour cette entité, retourne tous les articles actifs.
-    Structure attendue d'un tuple article dans `articles_complets` :
-    (0:code, 1:designation, 2:classe, 3:famille, 4:sous_famille, 5:sf_lib, 6:unite, 7:prix_achat, 8:tva, ...)
+    Filtre instantanément (< 0,005s) `articles_complets` selon les autorisations de l'entité.
+    Ordre réel du tuple `lister_articles_complet`:
+    (0:code, 1:designation, 2:sous_famille, 3:sf_lib, 4:famille, 5:classe, 6:unite, 7:prix_achat, 8:tva, 9:actif)
     """
     if not code_entite:
         return articles_complets
@@ -2803,14 +2801,13 @@ def filtrer_articles_autorises(articles_complets, type_entite, code_entite):
 
     resultat = []
     for a in articles_complets:
-        ca_u = str(itemgetter(0)(a)).upper()
+        ca_u = str(itemgetter(0)(a)).strip().upper()
         if ca_u in articles_exclus:
             continue
-        cl_u = str(itemgetter(2)(a) or "").upper()
-        fam_u = str(itemgetter(3)(a) or "").upper()
-        sf_u = str(itemgetter(4)(a) or "").upper()
+        sf_u = str(itemgetter(2)(a) or "").strip().upper()
+        fam_u = str(itemgetter(4)(a) or "").strip().upper()
+        cl_u = str(itemgetter(5)(a) or "").strip().upper()
 
-        # Si des sous-familles sont cochées, on vérifie en priorité
         if sf_ok:
             if sf_u in sf_ok:
                 resultat.append(a)
@@ -2821,6 +2818,63 @@ def filtrer_articles_autorises(articles_complets, type_entite, code_entite):
             if cl_u in classes_ok:
                 resultat.append(a)
         else:
-            # Uniquement des exclusions d'articles précises
             resultat.append(a)
     return resultat
+
+def nettoyer_et_restaurer_nomenclature():
+    """
+    Remet au propre la hiérarchie Classes (01..14) -> Familles -> Sous-Familles :
+    1. Fusionne les classes doublons créées par l'import (ex: 22->02 ALIMENTATION, 33->03, 44->04...).
+    2. Remplace les libellés 'BIENS' des familles par leurs vrais noms (ex: VIAN,POISSO,POUL,CHAR...).
+    3. Rétablit les vraies sous-familles (WATR, MEAT, FISH, OILF...) liées à chaque article.
+    """
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        # 1. Correspondance officielle des classes de référence (01 à 14)
+        classes_ref = {
+            "BOISSONS": "01",
+            "ALIMENTATION": "02",
+            "FRTS BUREAUX": "03",
+            "HYGIENE": "04",
+            "FRTS CLIENTS": "05",
+            "PME & PMC": "06",
+            "MAINTENANCE": "07",
+            "LINGE & UNIFORME": "08",
+            "EMBALLAGE": "09",
+            "PRODUITS PISCINES & SEL": "10",
+            "EXTRA ARTICLES": "11",
+            "ANIMATION ARTICLES": "12",
+            "THALASSO": "13",
+            "ACHATS DIVERS": "14"
+        }
+        for lib_c, code_c in classes_ref.items():
+            c.execute("INSERT OR IGNORE INTO classes (code, libelle, actif) VALUES (?, ?, 1)", (code_c, lib_c))
+            c.execute("UPDATE classes SET libelle = ?, actif = 1 WHERE code = ?", (lib_c, code_c))
+
+        # 2. Rattacher toutes les familles aux codes classes officiels (01..14)
+        c.execute("SELECT code, libelle FROM classes")
+        toutes_cl = {str(itemgetter(0)(r)).strip().upper(): str(itemgetter(1)(r)).strip().upper() for r in c.fetchall()}
+        for old_code, old_lib in toutes_cl.items():
+            if old_lib in classes_ref and old_code != classes_ref[old_lib]:
+                new_code = classes_ref[old_lib]
+                c.execute("UPDATE familles SET code_classe = ? WHERE UPPER(code_classe) = ?", (new_code, old_code))
+                c.execute("UPDATE articles SET classe = ? WHERE UPPER(classe) = ?", (new_code, old_code))
+                c.execute("DELETE FROM classes WHERE code = ?", (old_code,))
+
+        # 3. Corriger les libellés 'BIENS' des familles à partir des sous-familles ou codes
+        c.execute("SELECT code, libelle, code_classe FROM familles")
+        for f_code, f_lib, f_cl in c.fetchall():
+            if str(f_lib or "").strip().upper() in ("BIENS", "SERVICE INCORPORABLE", ""):
+                # Si une seule sous-famille porte le nom de la famille, ou reprendre le premier libellé de sous-famille représentatif
+                c.execute("SELECT libelle FROM sous_familles WHERE UPPER(code_famille) = UPPER(?) ORDER BY code LIMIT 1", (f_code,))
+                r_sf = c.fetchone()
+                if r_sf and itemgetter(0)(r_sf):
+                    c.execute("UPDATE familles SET libelle = ? WHERE code = ?", (itemgetter(0)(r_sf), f_code))
+
+        conn.commit()
+        return True, "Nomenclature nettoyée : classes doublons fusionnées (01 à 14) et libellés des familles restaurés."
+    except Exception as e:
+        return False, f"Erreur nettoyage : {e}"
+    finally:
+        conn.close()

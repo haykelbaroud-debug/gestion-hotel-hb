@@ -2905,3 +2905,12 @@ def nettoyer_et_restaurer_nomenclature():
         return False, f"Erreur nettoyage : {e}"
     finally:
         conn.close()
+def activer_tous_fournisseurs_importes():
+    """S'assure que tous les fournisseurs importés sans statut actif explicite sont bien actifs (actif = 1)."""
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("UPDATE fournisseurs SET actif = 1 WHERE actif IS NULL OR actif = ''")
+        conn.commit()
+    finally:
+        conn.close()

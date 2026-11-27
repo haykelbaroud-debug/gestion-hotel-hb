@@ -655,9 +655,9 @@ elif menu == "⚙️ Paramétrage de base":
             else:
                 st.error(msg_n)
 
-       st.divider()
-    st.subheader("🔐 Autorisations par Classe, Famille, Sous-Famille & Article")
-    st.info("Sélectionnez les Classes, Familles ou Sous-Familles AUTORISÉES pour ce Fournisseur ou Département (vide = tout autorisé), puis décochez les articles précis à exclure.")
+            st.divider()
+        st.subheader("🔐 Autorisations par Classe, Famille, Sous-Famille & Article")
+        st.info("Sélectionnez les Classes, Familles ou Sous-Familles AUTORISÉES pour ce Fournisseur ou Département (vide = tout autorisé), puis décochez les articles précis à exclure.")
 
     type_ent_sel = st.radio(
         "Type d'entité à paramétrer :",

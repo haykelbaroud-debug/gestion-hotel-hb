@@ -2831,20 +2831,28 @@ def filtrer_articles_autorises(articles_complets, type_entite, code_entite):
         if val in cl_lib_to_code and cl_lib_to_code[val]:
             cl_cibles.add(cl_lib_to_code[val])
 
-    # Liens réels Famille <-> Classe
+        # Liens réels Famille <-> Classe (gère code et libellé des deux côtés)
     fam_to_cl = {}
     fam_cibles = set(familles_ok)
     for f_code, f_lib, f_cl in rows_f:
+        # Normaliser f_cl (peut être '02' ou 'ALIMENTATION')
+        cl_norm = {f_cl} if f_cl else set()
+        if f_cl in cl_code_to_lib and cl_code_to_lib[f_cl]:
+            cl_norm.add(cl_code_to_lib[f_cl])
+        if f_cl in cl_lib_to_code and cl_lib_to_code[f_cl]:
+            cl_norm.add(cl_lib_to_code[f_cl])
+
         if f_code:
-            fam_to_cl[f_code] = f_cl
+            fam_to_cl[f_code] = cl_norm
         if f_lib:
-            fam_to_cl[f_lib] = f_cl
+            fam_to_cl[f_lib] = cl_norm
+
         if (f_code and f_code in familles_ok) or (f_lib and f_lib in familles_ok):
             if f_code:
                 fam_cibles.add(f_code)
             if f_lib:
                 fam_cibles.add(f_lib)
-        elif not familles_ok and not sf_ok and f_cl and f_cl in cl_cibles:
+        elif not familles_ok and not sf_ok and (cl_norm & cl_cibles):
             if f_code:
                 fam_cibles.add(f_code)
             if f_lib:
@@ -2855,13 +2863,13 @@ def filtrer_articles_autorises(articles_complets, type_entite, code_entite):
     sf_to_cl = {}
     sf_cibles = set(sf_ok)
     for s_code, s_lib, s_fam in rows_sf:
-        cl_parent = fam_to_cl.get(s_fam, "")
+        cl_parents = fam_to_cl.get(s_fam, set())
         if s_code:
             sf_to_fam[s_code] = s_fam
-            sf_to_cl[s_code] = cl_parent
+            sf_to_cl[s_code] = cl_parents
         if s_lib:
             sf_to_fam[s_lib] = s_fam
-            sf_to_cl[s_lib] = cl_parent
+            sf_to_cl[s_lib] = cl_parents
 
         if (s_code and s_code in sf_ok) or (s_lib and s_lib in sf_ok):
             if s_code:
@@ -2870,13 +2878,12 @@ def filtrer_articles_autorises(articles_complets, type_entite, code_entite):
                 sf_cibles.add(s_lib)
         elif not sf_ok and (
             (s_fam and s_fam in fam_cibles)
-            or (cl_parent and cl_parent in cl_cibles)
+            or bool(cl_parents & cl_cibles)
         ):
             if s_code:
                 sf_cibles.add(s_code)
             if s_lib:
                 sf_cibles.add(s_lib)
-
     resultat = []
     for a in articles_complets:
         ca_u = str(itemgetter(0)(a) or "").strip().upper()

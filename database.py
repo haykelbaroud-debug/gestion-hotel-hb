@@ -2789,8 +2789,12 @@ def enregistrer_config_autorisations_entite(type_entite, code_entite, classes_ok
         conn.close()
 def filtrer_articles_autorises(articles_complets, type_entite, code_entite):
     """
-    Filtre en lecture seule `articles_complets` selon les autorisations enregistrées
-    sans modifier la base ni utiliser de préfixes numériques ambigus.
+    Filtre en lecture seule `articles_complets` par cascade stricte :
+    - Vide = tout autorisé
+    - Classes cochées = uniquement ces classes
+    - Familles cochées = uniquement ces familles (parmi les classes)
+    - Sous-familles cochées = uniquement ces sous-familles
+    - Articles exclus = retirés de la liste finale
     """
     if not code_entite:
         return articles_complets
@@ -2804,81 +2808,6 @@ def filtrer_articles_autorises(articles_complets, type_entite, code_entite):
     if not classes_ok and not familles_ok and not sf_ok and not articles_exclus:
         return articles_complets
 
-    conn = get_connection()
-    try:
-        c = conn.cursor()
-        c.execute("SELECT UPPER(TRIM(code)), UPPER(TRIM(libelle)) FROM classes")
-        rows_cl = c.fetchall()
-
-        c.execute("SELECT UPPER(TRIM(code)), UPPER(TRIM(libelle)), UPPER(TRIM(code_classe)) FROM familles")
-        rows_f = c.fetchall()
-
-        c.execute("SELECT UPPER(TRIM(code)), UPPER(TRIM(libelle)), UPPER(TRIM(code_famille)) FROM sous_familles")
-        rows_sf = c.fetchall()
-    finally:
-        conn.close()
-
-    cl_code_to_lib = {code_c: lib_c for code_c, lib_c in rows_cl if code_c}
-    cl_lib_to_code = {lib_c: code_c for code_c, lib_c in rows_cl if lib_c}
-
-    cl_cibles = set(classes_ok)
-    for val in list(classes_ok):
-        if val in cl_code_to_lib and cl_code_to_lib[val]:
-            cl_cibles.add(cl_code_to_lib[val])
-        if val in cl_lib_to_code and cl_lib_to_code[val]:
-            cl_cibles.add(cl_lib_to_code[val])
-
-    fam_to_cl = {}
-    fam_cibles = set(familles_ok)
-    for f_code, f_lib, f_cl in rows_f:
-        cl_norm = {f_cl} if f_cl else set()
-        if f_cl in cl_code_to_lib and cl_code_to_lib[f_cl]:
-            cl_norm.add(cl_code_to_lib[f_cl])
-        if f_cl in cl_lib_to_code and cl_lib_to_code[f_cl]:
-            cl_norm.add(cl_lib_to_code[f_cl])
-
-        if f_code:
-            fam_to_cl[f_code] = cl_norm
-        if f_lib:
-            fam_to_cl[f_lib] = cl_norm
-
-        if (f_code and f_code in familles_ok) or (f_lib and f_lib in familles_ok):
-            if f_code:
-                fam_cibles.add(f_code)
-            if f_lib:
-                fam_cibles.add(f_lib)
-        elif not familles_ok and not sf_ok and (cl_norm & cl_cibles):
-            if f_code:
-                fam_cibles.add(f_code)
-            if f_lib:
-                fam_cibles.add(f_lib)
-
-    sf_to_fam = {}
-    sf_to_cl = {}
-    sf_cibles = set(sf_ok)
-    for s_code, s_lib, s_fam in rows_sf:
-        cl_parents = fam_to_cl.get(s_fam, set())
-        if s_code:
-            sf_to_fam[s_code] = s_fam
-            sf_to_cl[s_code] = cl_parents
-        if s_lib:
-            sf_to_fam[s_lib] = s_fam
-            sf_to_cl[s_lib] = cl_parents
-
-        if (s_code and s_code in sf_ok) or (s_lib and s_lib in sf_ok):
-            if s_code:
-                sf_cibles.add(s_code)
-            if s_lib:
-                sf_cibles.add(s_lib)
-        elif not sf_ok and (
-            (s_fam and s_fam in fam_cibles)
-            or bool(cl_parents & cl_cibles)
-        ):
-            if s_code:
-                sf_cibles.add(s_code)
-            if s_lib:
-                sf_cibles.add(s_lib)
-
     resultat = []
     for a in articles_complets:
         ca_u = str(itemgetter(0)(a) or "").strip().upper()
@@ -2886,33 +2815,22 @@ def filtrer_articles_autorises(articles_complets, type_entite, code_entite):
             continue
 
         sf_u = str(itemgetter(2)(a) or "").strip().upper()
-        sf_lib_u = str(itemgetter(3)(a) or "").strip().upper()
-        fam_u = str(itemgetter(4)(a) or "").strip().upper() or sf_to_fam.get(sf_u, "") or sf_to_fam.get(sf_lib_u, "")
+        fam_u = str(itemgetter(4)(a) or "").strip().upper()
+        cl_u = str(itemgetter(5)(a) or "").strip().upper()
 
-        cl_art = str(itemgetter(5)(a) or "").strip().upper()
-        cl_parents_art = set()
-        if cl_art:
-            cl_parents_art.add(cl_art)
-        cl_parents_art.update(fam_to_cl.get(fam_u, set()))
-        cl_parents_art.update(sf_to_cl.get(sf_u, set()))
-        cl_parents_art.update(sf_to_cl.get(sf_lib_u, set()))
+        # 1. Vérifier le niveau Classe (si au moins une classe est cochée)
+        if classes_ok and cl_u not in classes_ok:
+            continue
 
-        if sf_ok:
-            if (sf_u and sf_u in sf_cibles) or (sf_lib_u and sf_lib_u in sf_cibles):
-                resultat.append(a)
-        elif familles_ok:
-            if (fam_u and fam_u in fam_cibles) or (sf_u and sf_u in sf_cibles) or (sf_lib_u and sf_lib_u in sf_cibles):
-                resultat.append(a)
-        elif classes_ok:
-            if (
-                bool(cl_parents_art & cl_cibles)
-                or (fam_u and fam_u in fam_cibles)
-                or (sf_u and sf_u in sf_cibles)
-                or (sf_lib_u and sf_lib_u in sf_cibles)
-            ):
-                resultat.append(a)
-        else:
-            resultat.append(a)
+        # 2. Vérifier le niveau Famille (si au moins une famille est cochée)
+        if familles_ok and fam_u not in familles_ok:
+            continue
+
+        # 3. Vérifier le niveau Sous-Famille (si au moins une sous-famille est cochée)
+        if sf_ok and sf_u not in sf_ok:
+            continue
+
+        resultat.append(a)
 
     return resultat
 def nettoyer_et_restaurer_nomenclature():

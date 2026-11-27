@@ -2791,8 +2791,6 @@ def filtrer_articles_autorises(articles_complets, type_entite, code_entite):
     """
     Filtre en lecture seule `articles_complets` selon les autorisations enregistrées
     sans modifier la base ni utiliser de préfixes numériques ambigus.
-    Ordre réel du tuple `lister_articles_complet`:
-    (0:code, 1:designation, 2:sous_famille, 3:sf_lib, 4:famille, 5:classe, 6:unite, 7:prix_achat, 8:tva, 9:actif)
     """
     if not code_entite:
         return articles_complets
@@ -2820,7 +2818,6 @@ def filtrer_articles_autorises(articles_complets, type_entite, code_entite):
     finally:
         conn.close()
 
-    # Correspondance code <-> libellé pour les classes
     cl_code_to_lib = {code_c: lib_c for code_c, lib_c in rows_cl if code_c}
     cl_lib_to_code = {lib_c: code_c for code_c, lib_c in rows_cl if lib_c}
 
@@ -2831,11 +2828,9 @@ def filtrer_articles_autorises(articles_complets, type_entite, code_entite):
         if val in cl_lib_to_code and cl_lib_to_code[val]:
             cl_cibles.add(cl_lib_to_code[val])
 
-        # Liens réels Famille <-> Classe (gère code et libellé des deux côtés)
     fam_to_cl = {}
     fam_cibles = set(familles_ok)
     for f_code, f_lib, f_cl in rows_f:
-        # Normaliser f_cl (peut être '02' ou 'ALIMENTATION')
         cl_norm = {f_cl} if f_cl else set()
         if f_cl in cl_code_to_lib and cl_code_to_lib[f_cl]:
             cl_norm.add(cl_code_to_lib[f_cl])
@@ -2858,7 +2853,6 @@ def filtrer_articles_autorises(articles_complets, type_entite, code_entite):
             if f_lib:
                 fam_cibles.add(f_lib)
 
-    # Liens réels Sous-Famille <-> Famille / Classe
     sf_to_fam = {}
     sf_to_cl = {}
     sf_cibles = set(sf_ok)
@@ -2884,6 +2878,7 @@ def filtrer_articles_autorises(articles_complets, type_entite, code_entite):
                 sf_cibles.add(s_code)
             if s_lib:
                 sf_cibles.add(s_lib)
+
     resultat = []
     for a in articles_complets:
         ca_u = str(itemgetter(0)(a) or "").strip().upper()
@@ -2893,7 +2888,8 @@ def filtrer_articles_autorises(articles_complets, type_entite, code_entite):
         sf_u = str(itemgetter(2)(a) or "").strip().upper()
         sf_lib_u = str(itemgetter(3)(a) or "").strip().upper()
         fam_u = str(itemgetter(4)(a) or "").strip().upper() or sf_to_fam.get(sf_u, "") or sf_to_fam.get(sf_lib_u, "")
-                cl_art = str(itemgetter(5)(a) or "").strip().upper()
+
+        cl_art = str(itemgetter(5)(a) or "").strip().upper()
         cl_parents_art = set()
         if cl_art:
             cl_parents_art.add(cl_art)
@@ -2915,8 +2911,6 @@ def filtrer_articles_autorises(articles_complets, type_entite, code_entite):
                 or (sf_lib_u and sf_lib_u in sf_cibles)
             ):
                 resultat.append(a)
-        else:
-            resultat.append(a)
         else:
             resultat.append(a)
 

@@ -1154,9 +1154,11 @@ elif menu == "🧾 Achats & Mouvements":
             else:
                 articles_filtres = db.filtrer_articles_autorises(articles_actifs, "DEPARTEMENT", dept_sel)
 
-            if not articles_filtres:
-                st.warning("⚠️ Aucun article n'est autorisé pour cette sélection. Vérifiez son paramétrage dans 'Paramétrage de base > Autorisations'.")
-                return
+                     if not articles_filtres:
+             cfg_dbg = db.lire_config_autorisations_entite("FOURNISSEUR" if besoin_fournisseur else "DEPARTEMENT", fourn_sel if besoin_fournisseur else dept_sel)
+             ex_art = articles_actifs if articles_actifs else "VIDE"
+             st.warning(f"⚠️ Aucun article autorisé. Config enregistrée={cfg_dbg} | Exemple article={ex_art[:6]}")
+             return
 
             map_art = {
                 itemgetter(0)(a): f"{itemgetter(0)(a)} - {itemgetter(1)(a)} ({itemgetter(6)(a)})"

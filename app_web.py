@@ -803,9 +803,9 @@ elif menu == "⚙️ Paramétrage de base":
             fams_art.discard("")
 
             if sel_sf:
-                # Correspondance directe sous-famille OU famille parente de cette sous-famille
-                if (sf_u in sel_sf or sf_lib in sel_sf) or (fams_art & fams_des_sf_sel):
+                if sf_u in sel_sf or sf_lib in sel_sf:
                     articles_eligibles.append(a)
+
             elif sel_familles:
                 if fams_art & set(sel_familles):
                     articles_eligibles.append(a)

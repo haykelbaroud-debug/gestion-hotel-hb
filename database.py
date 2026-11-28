@@ -2860,22 +2860,32 @@ def filtrer_articles_autorises(articles_complets, type_entite, code_entite):
                 sf_to_fam_lib[cle_sf] = f_lib
                 sf_to_cl[cle_sf] = cl_p
 
-    # Normaliser les sélections Familles & Sous-Familles en LIBELLÉS + CODES associés
+       # Normaliser les sélections Familles & Sous-Familles (gère plusieurs codes pour un même libellé !)
     fam_cibles = set(familles_ok)
-    for f_sel in list(familles_ok):
-        if f_sel in fam_code_to_lib:
-            fam_cibles.add(fam_code_to_lib[f_sel])
-        if f_sel in fam_lib_to_code:
-            fam_cibles.add(fam_lib_to_code[f_sel])
+    for f_c, f_l, _ in rows_f:
+        if (f_c and f_c in familles_ok) or (f_l and f_l in familles_ok):
+            if f_c:
+                fam_cibles.add(f_c)
+            if f_l:
+                fam_cibles.add(f_l)
+
+    # Si une famille est sélectionnée, récupérer aussi toutes ses sous-familles
+    sf_de_fam_cibles = set()
+    for s_c, s_l, s_f in rows_sf:
+        f_lib = fam_code_to_lib.get(s_f, s_f)
+        if s_f in fam_cibles or f_lib in fam_cibles:
+            if s_c:
+                sf_de_fam_cibles.add(s_c)
+            if s_l:
+                sf_de_fam_cibles.add(s_l)
 
     sf_cibles = set(sf_ok)
     for s_c, s_l, _ in rows_sf:
-        if s_c in sf_ok and s_l:
-            sf_cibles.add(s_l)
-        if s_l in sf_ok and s_c:
-            sf_cibles.add(s_c)
-
-    resultat = []
+        if (s_c and s_c in sf_ok) or (s_l and s_l in sf_ok):
+            if s_c:
+                sf_cibles.add(s_c)
+            if s_l:
+                sf_cibles.add(s_l)
     for a in articles_complets:
         ca_u = str(itemgetter(0)(a) or "").strip().upper()
         if ca_u in articles_exclus:
@@ -2906,11 +2916,18 @@ def filtrer_articles_autorises(articles_complets, type_entite, code_entite):
         }
         classes_article.discard("")
 
-                # 1. Filtrer par CLASSE (code ou libellé)
+                       # 1. Filtrer par CLASSE (code ou libellé)
         if classes_ok and not (classes_article & cl_cibles):
             continue
 
-        # 2. Filtrer par FAMILLE (union des libellés et codes de famille de l'article)
+        sf_article = {
+            sf_u,
+            sf_lib_u,
+            sf_b,
+        }
+        sf_article.discard("")
+
+        # 2. Filtrer par FAMILLE (union des libellés/codes de famille + sous-familles rattachées)
         familles_article = {
             fam_lib_u,
             fam_raw,
@@ -2921,8 +2938,14 @@ def filtrer_articles_autorises(articles_complets, type_entite, code_entite):
             sf_to_fam_lib.get(sf_b, ""),
         }
         familles_article.discard("")
-        if familles_ok and not (familles_article & fam_cibles):
+        if familles_ok and not (familles_article & fam_cibles) and not (sf_article & sf_de_fam_cibles):
             continue
+
+        # 3. Filtrer par SOUS-FAMILLE (union des libellés et codes de sous-famille de l'article)
+        if sf_ok and not (sf_article & sf_cibles):
+            continue
+
+        resultat.append(a)
 
         # 3. Filtrer par SOUS-FAMILLE (union des libellés et codes de sous-famille de l'article)
         sf_article = {

@@ -2895,17 +2895,19 @@ def filtrer_articles_autorises(articles_complets, type_entite, code_entite):
             or fam_code_to_lib.get(fam_raw, fam_raw)
         )
 
-        # Code/libellé de classe déduit depuis l'article ou la famille/sous-famille
-        cl_u = (
-            str(itemgetter(5)(a) or "").strip().upper()
-            or cl_b
-            or sf_to_cl.get(sf_u, "")
-            or sf_to_cl.get(sf_lib_u, "")
-            or fam_lib_to_cl.get(fam_lib_u, "")
-        )
+                # Toutes les classes possibles liées à cet article (article, famille ou sous-famille)
+        classes_article = {
+            str(itemgetter(5)(a) or "").strip().upper(),
+            cl_b,
+            sf_to_cl.get(sf_u, ""),
+            sf_to_cl.get(sf_lib_u, ""),
+            fam_lib_to_cl.get(fam_lib_u, ""),
+            fam_lib_to_cl.get(fam_raw, ""),
+        }
+        classes_article.discard("")
 
         # 1. Filtrer par CLASSE (code ou libellé)
-        if classes_ok and (cl_u not in cl_cibles and cl_b not in cl_cibles):
+        if classes_ok and not (classes_article & cl_cibles):
             continue
 
         # 2. Filtrer par FAMILLE (libellé de famille)
@@ -2919,6 +2921,7 @@ def filtrer_articles_autorises(articles_complets, type_entite, code_entite):
         resultat.append(a)
 
     return resultat
+
 def nettoyer_et_restaurer_nomenclature():
     """
     Remet au propre la hiérarchie exacte Classes (01..14) -> Familles -> Sous-Familles

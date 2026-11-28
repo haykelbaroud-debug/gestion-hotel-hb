@@ -742,7 +742,7 @@ elif menu == "⚙️ Paramétrage de base":
             key=f"ms_cl_{type_ent_code}_{code_ent_sel}"
         )
 
-                        # 2. Familles disponibles (par LIBELLÉ) selon les classes choisies
+                                # 2. Familles disponibles (par LIBELLÉ) selon les classes choisies
         fam_dispo_set = set()
         for c in (sel_classes if sel_classes else liste_cl_sorted):
             for f_code in cl_to_fam.get(c, set()):
@@ -757,7 +757,7 @@ elif menu == "⚙️ Paramétrage de base":
             key=f"ms_fam_{type_ent_code}_{code_ent_sel}"
         )
 
-                # 3. Sous-Familles disponibles (par LIBELLÉ, exactement comme les familles)
+        # 3. Sous-Familles disponibles (par LIBELLÉ) liées aux Familles / Classes sélectionnées
         fam_lib_to_codes = {}
         for fc, fl in nom_fam.items():
             fam_lib_to_codes.setdefault(fl.strip().upper(), set()).add(fc)
@@ -771,13 +771,14 @@ elif menu == "⚙️ Paramétrage de base":
                 codes_fam_cibles.update(cl_to_fam.get(c, set()))
 
         sf_dispo_set = set()
-        sf_lib_to_fam_libs = {}
+        sf_vers_fams = {}
         for fc in codes_fam_cibles:
             fl_nom = nom_fam.get(fc, fc).strip().upper()
             for sc in fam_to_sf.get(fc, set()):
                 sl_nom = nom_sf.get(sc, sc).strip().upper()
                 sf_dispo_set.add(sl_nom)
-                sf_lib_to_fam_libs.setdefault(sl_nom, set()).add(fl_nom)
+                sf_vers_fams.setdefault(sl_nom, set()).add(fl_nom)
+                sf_vers_fams.setdefault(sc.strip().upper(), set()).add(fl_nom)
 
         sf_dispo = sorted(sf_dispo_set)
         def_sf = [s for s in sf_ok_act if s in sf_dispo]
@@ -788,25 +789,28 @@ elif menu == "⚙️ Paramétrage de base":
             key=f"ms_sf_{type_ent_code}_{code_ent_sel}"
         )
 
-        # 4. Articles précis à DÉSACTIVER / EXCLURE (filtrés par libellés sélectionnés)
+        # 4. Articles précis à DÉSACTIVER / EXCLURE (liés aux Sous-Familles, Familles et Classes)
+        fams_des_sf_sel = set()
+        for s_sel in sel_sf:
+            fams_des_sf_sel.update(sf_vers_fams.get(s_sel, set()))
+
         articles_eligibles = []
         for a in tous_art_m8:
             sf_u = str(itemgetter(2)(a) or "").strip().upper()
             sf_lib = str(itemgetter(3)(a) or "").strip().upper()
             cl_u = str(itemgetter(5)(a) or "").strip().upper()
-            noms_sf_a = {x for x in (sf_u, sf_lib) if x}
-            noms_fam_a = set(noms_sf_a)
-            for sn in noms_sf_a:
-                noms_fam_a.update(sf_lib_to_fam_libs.get(sn, set()))
+            fams_art = {sf_u, sf_lib} | sf_vers_fams.get(sf_u, set()) | sf_vers_fams.get(sf_lib, set())
+            fams_art.discard("")
 
             if sel_sf:
-                if noms_sf_a & set(sel_sf):
+                # Correspondance directe sous-famille OU famille parente de cette sous-famille
+                if (sf_u in sel_sf or sf_lib in sel_sf) or (fams_art & fams_des_sf_sel):
                     articles_eligibles.append(a)
             elif sel_familles:
-                if noms_fam_a & set(sel_familles):
+                if fams_art & set(sel_familles):
                     articles_eligibles.append(a)
             elif sel_classes:
-                if cl_u in sel_classes or (noms_sf_a & sf_dispo_set):
+                if cl_u in sel_classes or (fams_art & fam_dispo_set):
                     articles_eligibles.append(a)
             else:
                 articles_eligibles.append(a)

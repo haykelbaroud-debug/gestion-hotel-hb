@@ -742,51 +742,79 @@ elif menu == "⚙️ Paramétrage de base":
             key=f"ms_cl_{type_ent_code}_{code_ent_sel}"
         )
 
-        # 2. Familles disponibles selon les classes choisies
+                # 2. Familles disponibles (par LIBELLÉ) selon les classes choisies
         fam_dispo_set = set()
         for c in (sel_classes if sel_classes else liste_cl_sorted):
-            fam_dispo_set.update(cl_to_fam.get(c, set()))
+            for f_code in cl_to_fam.get(c, set()):
+                fam_dispo_set.add(nom_fam.get(f_code, f_code).upper())
         fam_dispo = sorted(fam_dispo_set)
-        map_fam = {f: f"{f} - {nom_fam.get(f, f)}" for f in fam_dispo}
 
         def_fam = [f for f in fam_ok_act if f in fam_dispo]
         sel_familles = st.multiselect(
-            "2️⃣ Familles AUTORISÉES (optionnel : affine les classes choisies) :",
+            "2️⃣ Familles AUTORISÉES (par libellé, optionnel) :",
             fam_dispo,
             default=def_fam,
-            format_func=lambda x: map_fam[x],
             key=f"ms_fam_{type_ent_code}_{code_ent_sel}"
         )
 
-        # 3. Sous-Familles disponibles selon les familles ou classes choisies
+        # 3. Sous-Familles disponibles (par LIBELLÉ) selon les familles ou classes choisies
         sf_dispo_set = set()
-        for f in (sel_familles if sel_familles else fam_dispo):
-            sf_dispo_set.update(fam_to_sf.get(f, set()))
+        lib_to_codes_fam = {}
+        for fc, fl in nom_fam.items():
+            lib_to_codes_fam.setdefault(fl.upper(), set()).add(fc)
+
+        fams_cibles_codes = set()
+        if sel_familles:
+            for fl in sel_familles:
+                fams_cibles_codes.update(lib_to_codes_fam.get(fl, {fl}))
+        else:
+            for c in (sel_classes if sel_classes else liste_cl_sorted):
+                fams_cibles_codes.update(cl_to_fam.get(c, set()))
+
+        for fc in fams_cibles_codes:
+            for sc in fam_to_sf.get(fc, set()):
+                sf_dispo_set.add(nom_sf.get(sc, sc).upper())
         sf_dispo = sorted(sf_dispo_set)
-        map_sf = {s: f"{s} - {nom_sf.get(s, s)}" if nom_sf.get(s, s).upper() != s else s for s in sf_dispo}
 
         def_sf = [s for s in sf_ok_act if s in sf_dispo]
         sel_sf = st.multiselect(
-            "3️⃣ Sous-Familles AUTORISÉES (optionnel : ne sélectionnez que celles autorisées, ex. tout sauf OILF) :",
+            "3️⃣ Sous-Familles AUTORISÉES (par libellé, optionnel) :",
             sf_dispo,
             default=def_sf,
-            format_func=lambda x: map_sf[x],
             key=f"ms_sf_{type_ent_code}_{code_ent_sel}"
         )
 
-        # 4. Articles précis à DÉSACTIVER / EXCLURE (index 2 = sous_famille)
+                # 4. Articles précis à DÉSACTIVER / EXCLURE (aligné sur les libellés sélectionnés)
+        sf_cibles_apercu = set(sel_sf)
+        fam_cibles_apercu = set(sel_familles)
+        cl_cibles_apercu = set(sel_classes)
+
+        # Traduire les familles/classes cochées en libellés de sous-familles pour l'aperçu
+        if not sf_cibles_apercu:
+            if fam_cibles_apercu:
+                for fl in fam_cibles_apercu:
+                    for fc in lib_to_codes_fam.get(fl, {fl}):
+                        for sc in fam_to_sf.get(fc, set()):
+                            sf_cibles_apercu.add(nom_sf.get(sc, sc).upper())
+            elif cl_cibles_apercu:
+                for cl_c in cl_cibles_apercu:
+                    for fc in cl_to_fam.get(cl_c, set()):
+                        for sc in fam_to_sf.get(fc, set()):
+                            sf_cibles_apercu.add(nom_sf.get(sc, sc).upper())
+
         articles_eligibles = []
-        if sel_sf:
-            for s in sel_sf:
-                articles_eligibles.extend(art_par_sf.get(s, []))
-        elif sel_familles:
-            for f in sel_familles:
-                articles_eligibles.extend(art_par_fam.get(f, []))
-        elif sel_classes:
-            for c in sel_classes:
-                articles_eligibles.extend(art_par_cl.get(c, []))
-        else:
-            articles_eligibles = tous_art_m8
+        for a in tous_art_m8:
+            sf_u = str(itemgetter(2)(a) or "").strip().upper()
+            sf_lib = str(itemgetter(3)(a) or "").strip().upper()
+            cl_u = str(itemgetter(5)(a) or "").strip().upper()
+            if sf_cibles_apercu:
+                if sf_u in sf_cibles_apercu or sf_lib in sf_cibles_apercu:
+                    articles_eligibles.append(a)
+            elif cl_cibles_apercu:
+                if cl_u in cl_cibles_apercu:
+                    articles_eligibles.append(a)
+            else:
+                articles_eligibles.append(a)
 
         map_art_m8 = {
             itemgetter(0)(a).upper(): f"{itemgetter(0)(a)} - {itemgetter(1)(a)} [{itemgetter(2)(a)}]"
@@ -800,7 +828,6 @@ elif menu == "⚙️ Paramétrage de base":
             format_func=lambda x: map_art_m8[x],
             key=f"ms_exc_{type_ent_code}_{code_ent_sel}"
         )
-
         col_b1, col_b2 = st.columns(2)
         if col_b1.button("💾 Enregistrer ce paramétrage", type="primary", key="btn_save_m8"):
             ok_m8, msg_m8 = db.enregistrer_config_autorisations_entite(

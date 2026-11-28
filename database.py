@@ -2789,9 +2789,9 @@ def enregistrer_config_autorisations_entite(type_entite, code_entite, classes_ok
         conn.close()
 def filtrer_articles_autorises(articles_complets, type_entite, code_entite):
     """
-    Filtre en lecture seule `articles_complets` par cascade stricte :
+    Filtre en lecture seule `articles_complets` par cascade stricte (sans aucune équivalence numérique ambiguë) :
     - Vide = tout autorisé
-    - Classes cochées = uniquement ces classes (y compris équivalences 01..14 <-> 11..99)
+    - Classes cochées = uniquement les articles appartenant réellement à ces classes
     - Familles cochées = uniquement ces familles
     - Sous-familles cochées = uniquement ces sous-familles
     - Articles exclus = retirés de la liste finale
@@ -2808,36 +2808,53 @@ def filtrer_articles_autorises(articles_complets, type_entite, code_entite):
     if not classes_ok and not familles_ok and not sf_ok and not articles_exclus:
         return articles_complets
 
-    equivalences_classes = {
-        "01": {"01", "11", "BOISSONS"},
-        "02": {"02", "22", "ALIMENTATION"},
-        "03": {"03", "33", "FRTS BUREAUX"},
-        "04": {"04", "44", "HYGIENE"},
-        "05": {"05", "55", "FRTS CLIENTS"},
-        "06": {"06", "66", "PME & PMC"},
-        "07": {"07", "77", "MAINTENANCE"},
-        "08": {"08", "88", "LINGE & UNIFORME"},
-        "09": {"09", "99", "EMBALLAGE"},
-        "10": {"10", "PRODUITS PISCINES & SEL"},
-        "11": {"11", "EXTRA ARTICLES"},
-        "12": {"12", "ANIMATION ARTICLES"},
-        "13": {"13", "THALASSO"},
-        "14": {"14", "ACHATS DIVERS"},
-    }
-    classes_etendues = set(classes_ok)
-    for c_sel in list(classes_ok):
-        if c_sel in equivalences_classes:
-            classes_etendues.update(equivalences_classes[c_sel])
-
     conn = get_connection()
     try:
         c = conn.cursor()
-        c.execute("SELECT UPPER(TRIM(code)), UPPER(TRIM(code_famille)) FROM sous_familles")
-        sf_vers_fam = dict(c.fetchall())
-        c.execute("SELECT UPPER(TRIM(code)), UPPER(TRIM(code_classe)) FROM familles")
-        fam_vers_cl = dict(c.fetchall())
+        c.execute("SELECT UPPER(TRIM(code)), UPPER(TRIM(libelle)) FROM classes")
+        rows_cl = c.fetchall()
+        c.execute("SELECT UPPER(TRIM(code)), UPPER(TRIM(libelle)), UPPER(TRIM(code_classe)) FROM familles")
+        rows_f = c.fetchall()
+        c.execute("SELECT UPPER(TRIM(code)), UPPER(TRIM(libelle)), UPPER(TRIM(code_famille)) FROM sous_familles")
+        rows_sf = c.fetchall()
     finally:
         conn.close()
+
+    # Correspondance stricte code <-> libellé de la même classe
+    cl_cibles = set(classes_ok)
+    for c_db, l_db in rows_cl:
+        if c_db in classes_ok and l_db:
+            cl_cibles.add(l_db)
+        if l_db in classes_ok and c_db:
+            cl_cibles.add(c_db)
+
+    # Familles appartenant strictement à ces classes
+    fam_de_cl = set()
+    fam_to_cl = {}
+    for f_c, f_l, f_cl in rows_f:
+        if f_c:
+            fam_to_cl[f_c] = f_cl
+        if f_l:
+            fam_to_cl[f_l] = f_cl
+        if f_cl in cl_cibles:
+            if f_c:
+                fam_de_cl.add(f_c)
+            if f_l:
+                fam_de_cl.add(f_l)
+
+    # Sous-familles appartenant strictement à ces familles/classes
+    sf_de_cl = set()
+    sf_to_fam = {}
+    for s_c, s_l, s_f in rows_sf:
+        if s_c:
+            sf_to_fam[s_c] = s_f
+        if s_l:
+            sf_to_fam[s_l] = s_f
+        if s_f in fam_de_cl or fam_to_cl.get(s_f, "") in cl_cibles:
+            if s_c:
+                sf_de_cl.add(s_c)
+            if s_l:
+                sf_de_cl.add(s_l)
 
     resultat = []
     for a in articles_complets:
@@ -2846,14 +2863,22 @@ def filtrer_articles_autorises(articles_complets, type_entite, code_entite):
             continue
 
         sf_u = str(itemgetter(2)(a) or "").strip().upper()
-        fam_u = sf_vers_fam.get(sf_u) or str(itemgetter(4)(a) or "").strip().upper()
-        cl_u = fam_vers_cl.get(fam_u) or str(itemgetter(5)(a) or "").strip().upper()
+        sf_lib_u = str(itemgetter(3)(a) or "").strip().upper()
+        fam_u = str(itemgetter(4)(a) or "").strip().upper() or sf_to_fam.get(sf_u, "")
+        cl_u = str(itemgetter(5)(a) or "").strip().upper() or fam_to_cl.get(fam_u, "")
 
-        if classes_ok and cl_u not in classes_etendues:
-            continue
+        if classes_ok:
+            if not (
+                cl_u in cl_cibles
+                or fam_u in fam_de_cl
+                or sf_u in sf_de_cl
+                or sf_lib_u in sf_de_cl
+            ):
+                continue
+
         if familles_ok and fam_u not in familles_ok:
             continue
-        if sf_ok and sf_u not in sf_ok:
+        if sf_ok and (sf_u not in sf_ok and sf_lib_u not in sf_ok):
             continue
 
         resultat.append(a)

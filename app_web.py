@@ -742,11 +742,11 @@ elif menu == "⚙️ Paramétrage de base":
             key=f"ms_cl_{type_ent_code}_{code_ent_sel}"
         )
 
-                # 2. Familles disponibles (par LIBELLÉ) selon les classes choisies
+                        # 2. Familles disponibles (par LIBELLÉ) selon les classes choisies
         fam_dispo_set = set()
         for c in (sel_classes if sel_classes else liste_cl_sorted):
             for f_code in cl_to_fam.get(c, set()):
-                fam_dispo_set.add(nom_fam.get(f_code, f_code).upper())
+                fam_dispo_set.add(nom_fam.get(f_code, f_code).strip().upper())
         fam_dispo = sorted(fam_dispo_set)
 
         def_fam = [f for f in fam_ok_act if f in fam_dispo]
@@ -757,25 +757,40 @@ elif menu == "⚙️ Paramétrage de base":
             key=f"ms_fam_{type_ent_code}_{code_ent_sel}"
         )
 
-        # 3. Sous-Familles disponibles (par LIBELLÉ) selon les familles ou classes choisies
+        # 3. Sous-Familles disponibles liées aux Familles (ou Classes) sélectionnées
+        conn_sf = db.get_connection()
+        cur_sf = conn_sf.cursor()
+        cur_sf.execute("""
+            SELECT UPPER(TRIM(sf.libelle)), UPPER(TRIM(sf.code)),
+                   UPPER(TRIM(COALESCE(f.libelle, sf.code_famille))),
+                   UPPER(TRIM(COALESCE(f.code_classe, '')))
+            FROM sous_familles sf
+            LEFT JOIN familles f ON UPPER(TRIM(sf.code_famille)) = UPPER(TRIM(f.code))
+                                 OR UPPER(TRIM(sf.code_famille)) = UPPER(TRIM(f.libelle))
+        """)
+        liens_sf = cur_sf.fetchall()
+        conn_sf.close()
+
         sf_dispo_set = set()
-        lib_to_codes_fam = {}
-        for fc, fl in nom_fam.items():
-            lib_to_codes_fam.setdefault(fl.upper(), set()).add(fc)
+        sf_vers_fam_lib = {}
+        for sf_l, sf_c, fam_l, cl_c in liens_sf:
+            nom_sf_aff = sf_l or sf_c
+            if not nom_sf_aff:
+                continue
+            sf_vers_fam_lib[nom_sf_aff] = fam_l
+            if sf_c:
+                sf_vers_fam_lib[sf_c] = fam_l
 
-        fams_cibles_codes = set()
-        if sel_familles:
-            for fl in sel_familles:
-                fams_cibles_codes.update(lib_to_codes_fam.get(fl, {fl}))
-        else:
-            for c in (sel_classes if sel_classes else liste_cl_sorted):
-                fams_cibles_codes.update(cl_to_fam.get(c, set()))
+            if sel_familles:
+                if fam_l in sel_familles:
+                    sf_dispo_set.add(nom_sf_aff)
+            elif sel_classes:
+                if cl_c in sel_classes or fam_l in fam_dispo_set:
+                    sf_dispo_set.add(nom_sf_aff)
+            else:
+                sf_dispo_set.add(nom_sf_aff)
 
-        for fc in fams_cibles_codes:
-            for sc in fam_to_sf.get(fc, set()):
-                sf_dispo_set.add(nom_sf.get(sc, sc).upper())
         sf_dispo = sorted(sf_dispo_set)
-
         def_sf = [s for s in sf_ok_act if s in sf_dispo]
         sel_sf = st.multiselect(
             "3️⃣ Sous-Familles AUTORISÉES (par libellé, optionnel) :",
@@ -784,39 +799,22 @@ elif menu == "⚙️ Paramétrage de base":
             key=f"ms_sf_{type_ent_code}_{code_ent_sel}"
         )
 
-                        # 4. Articles précis à DÉSACTIVER / EXCLURE (synchronisé en direct avec votre sélection 1, 2, 3)
-        conn_m8 = db.get_connection()
-        cur_m8 = conn_m8.cursor()
-        cur_m8.execute("SELECT UPPER(TRIM(code)), UPPER(TRIM(libelle)), UPPER(TRIM(code_famille)) FROM sous_familles")
-        rows_sf_m8 = cur_m8.fetchall()
-        cur_m8.execute("SELECT UPPER(TRIM(code)), UPPER(TRIM(libelle)) FROM familles")
-        fam_c2l_m8 = {fc: fl for fc, fl in cur_m8.fetchall() if fc and fl}
-        conn_m8.close()
-
-        sf_vers_fam_m8 = {}
-        for sc, sl, sf_parent in rows_sf_m8:
-            fl_p = fam_c2l_m8.get(sf_parent, sf_parent)
-            if sc:
-                sf_vers_fam_m8[sc] = fl_p
-            if sl:
-                sf_vers_fam_m8[sl] = fl_p
-
+        # 4. Articles précis à DÉSACTIVER / EXCLURE (synchronisé avec 1, 2 et 3)
         articles_eligibles = []
         for a in tous_art_m8:
             sf_u = str(itemgetter(2)(a) or "").strip().upper()
             sf_lib = str(itemgetter(3)(a) or "").strip().upper()
             cl_u = str(itemgetter(5)(a) or "").strip().upper()
-            fams_a = {sf_u, sf_lib, sf_vers_fam_m8.get(sf_u, ""), sf_vers_fam_m8.get(sf_lib, "")}
-            fams_a.discard("")
+            fam_de_art = sf_vers_fam_lib.get(sf_u) or sf_vers_fam_lib.get(sf_lib) or sf_u
 
             if sel_sf:
                 if sf_u in sel_sf or sf_lib in sel_sf:
                     articles_eligibles.append(a)
             elif sel_familles:
-                if fams_a & set(sel_familles):
+                if fam_de_art in sel_familles or sf_u in sel_familles:
                     articles_eligibles.append(a)
             elif sel_classes:
-                if cl_u in sel_classes or any(sf_u in sf_dispo or sf_lib in sf_dispo for _ in [1]):
+                if cl_u in sel_classes or sf_u in sf_dispo_set or sf_lib in sf_dispo_set:
                     articles_eligibles.append(a)
             else:
                 articles_eligibles.append(a)

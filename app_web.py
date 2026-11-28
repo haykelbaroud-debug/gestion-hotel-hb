@@ -712,7 +712,7 @@ elif menu == "⚙️ Paramétrage de base":
 
         # Indexation des articles selon leur structure réelle :
         # (0:code, 1:designation, 2:sous_famille, 3:sf_lib, 4:famille, 5:classe)
-               sf_vers_fam_map = {s: f for f, sfs in fam_to_sf.items() for s in sfs}
+        sf_vers_fam_map = {s: f for f, sfs in fam_to_sf.items() for s in sfs}
         fam_vers_cl_map = {f: c for c, fams in cl_to_fam.items() for f in fams}
 
         art_par_cl = {}

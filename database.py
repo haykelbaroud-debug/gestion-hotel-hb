@@ -2792,7 +2792,7 @@ def filtrer_articles_autorises(articles_complets, type_entite, code_entite):
     Filtre en lecture seule `articles_complets` par cascade stricte :
     - Vide = tout autorisé
     - Classes cochées = uniquement ces classes
-    - Familles cochées = uniquement ces familles (parmi les classes)
+    - Familles cochées = uniquement ces familles
     - Sous-familles cochées = uniquement ces sous-familles
     - Articles exclus = retirés de la liste finale
     """
@@ -2808,6 +2808,16 @@ def filtrer_articles_autorises(articles_complets, type_entite, code_entite):
     if not classes_ok and not familles_ok and not sf_ok and not articles_exclus:
         return articles_complets
 
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("SELECT UPPER(TRIM(code)), UPPER(TRIM(code_famille)) FROM sous_familles")
+        sf_vers_fam = dict(c.fetchall())
+        c.execute("SELECT UPPER(TRIM(code)), UPPER(TRIM(code_classe)) FROM familles")
+        fam_vers_cl = dict(c.fetchall())
+    finally:
+        conn.close()
+
     resultat = []
     for a in articles_complets:
         ca_u = str(itemgetter(0)(a) or "").strip().upper()
@@ -2815,18 +2825,13 @@ def filtrer_articles_autorises(articles_complets, type_entite, code_entite):
             continue
 
         sf_u = str(itemgetter(2)(a) or "").strip().upper()
-        fam_u = str(itemgetter(4)(a) or "").strip().upper()
-        cl_u = str(itemgetter(5)(a) or "").strip().upper()
+        fam_u = sf_vers_fam.get(sf_u) or str(itemgetter(4)(a) or "").strip().upper()
+        cl_u = fam_vers_cl.get(fam_u) or str(itemgetter(5)(a) or "").strip().upper()
 
-        # 1. Vérifier le niveau Classe (si au moins une classe est cochée)
         if classes_ok and cl_u not in classes_ok:
             continue
-
-        # 2. Vérifier le niveau Famille (si au moins une famille est cochée)
         if familles_ok and fam_u not in familles_ok:
             continue
-
-        # 3. Vérifier le niveau Sous-Famille (si au moins une sous-famille est cochée)
         if sf_ok and sf_u not in sf_ok:
             continue
 

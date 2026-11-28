@@ -1181,8 +1181,13 @@ elif menu == "🧾 Achats & Mouvements":
             else:
                 articles_filtres = db.filtrer_articles_autorises(articles_actifs, "DEPARTEMENT", dept_sel)
 
-            if not articles_filtres:
-                st.warning("⚠️ Aucun article n'est autorisé pour cette sélection. Vérifiez son paramétrage dans 'Paramétrage de base > Autorisations'.")
+                       if not articles_filtres:
+                conn_v = db.get_connection()
+                cur_v = conn_v.cursor()
+                cur_v.execute("SELECT code, designation, classe, sous_famille FROM articles WHERE UPPER(designation) LIKE '%EAU%' OR UPPER(designation) LIKE '%POULET%' LIMIT 3")
+                ex_rows = cur_v.fetchall()
+                conn_v.close()
+                st.warning(f"⚠️ Aucun article autorisé. Réalité table articles={ex_rows}")
                 return
 
             map_art = {

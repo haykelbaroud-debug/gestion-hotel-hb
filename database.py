@@ -2791,7 +2791,7 @@ def filtrer_articles_autorises(articles_complets, type_entite, code_entite):
     """
     Filtre en lecture seule `articles_complets` par cascade stricte :
     - Vide = tout autorisé
-    - Classes cochées = uniquement ces classes
+    - Classes cochées = uniquement ces classes (y compris équivalences 01..14 <-> 11..99)
     - Familles cochées = uniquement ces familles
     - Sous-familles cochées = uniquement ces sous-familles
     - Articles exclus = retirés de la liste finale
@@ -2807,6 +2807,27 @@ def filtrer_articles_autorises(articles_complets, type_entite, code_entite):
 
     if not classes_ok and not familles_ok and not sf_ok and not articles_exclus:
         return articles_complets
+
+    equivalences_classes = {
+        "01": {"01", "11", "BOISSONS"},
+        "02": {"02", "22", "ALIMENTATION"},
+        "03": {"03", "33", "FRTS BUREAUX"},
+        "04": {"04", "44", "HYGIENE"},
+        "05": {"05", "55", "FRTS CLIENTS"},
+        "06": {"06", "66", "PME & PMC"},
+        "07": {"07", "77", "MAINTENANCE"},
+        "08": {"08", "88", "LINGE & UNIFORME"},
+        "09": {"09", "99", "EMBALLAGE"},
+        "10": {"10", "PRODUITS PISCINES & SEL"},
+        "11": {"11", "EXTRA ARTICLES"},
+        "12": {"12", "ANIMATION ARTICLES"},
+        "13": {"13", "THALASSO"},
+        "14": {"14", "ACHATS DIVERS"},
+    }
+    classes_etendues = set(classes_ok)
+    for c_sel in list(classes_ok):
+        if c_sel in equivalences_classes:
+            classes_etendues.update(equivalences_classes[c_sel])
 
     conn = get_connection()
     try:
@@ -2828,7 +2849,7 @@ def filtrer_articles_autorises(articles_complets, type_entite, code_entite):
         fam_u = sf_vers_fam.get(sf_u) or str(itemgetter(4)(a) or "").strip().upper()
         cl_u = fam_vers_cl.get(fam_u) or str(itemgetter(5)(a) or "").strip().upper()
 
-        if classes_ok and cl_u not in classes_ok:
+        if classes_ok and cl_u not in classes_etendues:
             continue
         if familles_ok and fam_u not in familles_ok:
             continue

@@ -784,34 +784,39 @@ elif menu == "⚙️ Paramétrage de base":
             key=f"ms_sf_{type_ent_code}_{code_ent_sel}"
         )
 
-                # 4. Articles précis à DÉSACTIVER / EXCLURE (aligné sur les libellés sélectionnés)
-        sf_cibles_apercu = set(sel_sf)
-        fam_cibles_apercu = set(sel_familles)
-        cl_cibles_apercu = set(sel_classes)
+                        # 4. Articles précis à DÉSACTIVER / EXCLURE (synchronisé en direct avec votre sélection 1, 2, 3)
+        conn_m8 = db.get_connection()
+        cur_m8 = conn_m8.cursor()
+        cur_m8.execute("SELECT UPPER(TRIM(code)), UPPER(TRIM(libelle)), UPPER(TRIM(code_famille)) FROM sous_familles")
+        rows_sf_m8 = cur_m8.fetchall()
+        cur_m8.execute("SELECT UPPER(TRIM(code)), UPPER(TRIM(libelle)) FROM familles")
+        fam_c2l_m8 = {fc: fl for fc, fl in cur_m8.fetchall() if fc and fl}
+        conn_m8.close()
 
-        # Traduire les familles/classes cochées en libellés de sous-familles pour l'aperçu
-        if not sf_cibles_apercu:
-            if fam_cibles_apercu:
-                for fl in fam_cibles_apercu:
-                    for fc in lib_to_codes_fam.get(fl, {fl}):
-                        for sc in fam_to_sf.get(fc, set()):
-                            sf_cibles_apercu.add(nom_sf.get(sc, sc).upper())
-            elif cl_cibles_apercu:
-                for cl_c in cl_cibles_apercu:
-                    for fc in cl_to_fam.get(cl_c, set()):
-                        for sc in fam_to_sf.get(fc, set()):
-                            sf_cibles_apercu.add(nom_sf.get(sc, sc).upper())
+        sf_vers_fam_m8 = {}
+        for sc, sl, sf_parent in rows_sf_m8:
+            fl_p = fam_c2l_m8.get(sf_parent, sf_parent)
+            if sc:
+                sf_vers_fam_m8[sc] = fl_p
+            if sl:
+                sf_vers_fam_m8[sl] = fl_p
 
         articles_eligibles = []
         for a in tous_art_m8:
             sf_u = str(itemgetter(2)(a) or "").strip().upper()
             sf_lib = str(itemgetter(3)(a) or "").strip().upper()
             cl_u = str(itemgetter(5)(a) or "").strip().upper()
-            if sf_cibles_apercu:
-                if sf_u in sf_cibles_apercu or sf_lib in sf_cibles_apercu:
+            fams_a = {sf_u, sf_lib, sf_vers_fam_m8.get(sf_u, ""), sf_vers_fam_m8.get(sf_lib, "")}
+            fams_a.discard("")
+
+            if sel_sf:
+                if sf_u in sel_sf or sf_lib in sel_sf:
                     articles_eligibles.append(a)
-            elif cl_cibles_apercu:
-                if cl_u in cl_cibles_apercu:
+            elif sel_familles:
+                if fams_a & set(sel_familles):
+                    articles_eligibles.append(a)
+            elif sel_classes:
+                if cl_u in sel_classes or any(sf_u in sf_dispo or sf_lib in sf_dispo for _ in [1]):
                     articles_eligibles.append(a)
             else:
                 articles_eligibles.append(a)

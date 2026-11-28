@@ -1155,10 +1155,16 @@ elif menu == "🧾 Achats & Mouvements":
                 articles_filtres = db.filtrer_articles_autorises(articles_actifs, "DEPARTEMENT", dept_sel)
 
             if not articles_filtres:
-             cfg_dbg = db.lire_config_autorisations_entite("FOURNISSEUR" if besoin_fournisseur else "DEPARTEMENT", fourn_sel if besoin_fournisseur else dept_sel)
-             ex_art = articles_actifs if articles_actifs else "VIDE"
-             st.warning(f"⚠️ Aucun article autorisé. Config enregistrée={cfg_dbg} | Exemple article={ex_art[:6]}")
-             return
+                conn_d = db.get_connection()
+                cur_d = conn_d.cursor()
+                cur_d.execute("SELECT DISTINCT code_classe FROM familles")
+                cl_dans_fam = [itemgetter(0)(r) for r in cur_d.fetchall()]
+                cur_d.execute("SELECT DISTINCT classe FROM articles LIMIT 25")
+                cl_dans_art = [itemgetter(0)(r) for r in cur_d.fetchall()]
+                conn_d.close()
+                st.warning(f"⚠️ Aucun article autorisé. Classes dans familles={cl_dans_fam} | Classes dans articles={cl_dans_art}")
+                return
+
 
             map_art = {
                 itemgetter(0)(a): f"{itemgetter(0)(a)} - {itemgetter(1)(a)} ({itemgetter(6)(a)})"

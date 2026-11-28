@@ -2857,13 +2857,19 @@ def filtrer_articles_autorises(articles_complets, type_entite, code_entite):
         if f_l in familles_ok and f_c:
             fam_cibles.add(f_c)
 
-    # Traduire les sous-familles choisies en ensemble de libellés + codes associés
+        # Traduire les sous-familles choisies en ensemble de libellés + codes associés
     sf_cibles = set(sf_ok)
-    for s_c, s_l, _ in rows_sf:
-        if s_c in sf_ok and s_l:
-            sf_cibles.add(s_l)
-        if s_l in sf_ok and s_c:
-            sf_cibles.add(s_c)
+    fams_des_sf_cibles = set()
+    for s_c, s_l, s_f in rows_sf:
+        if s_c in sf_ok or s_l in sf_ok:
+            if s_l:
+                sf_cibles.add(s_l)
+            if s_c:
+                sf_cibles.add(s_c)
+            f_lib_parent = fam_code_to_lib.get(s_f, s_f)
+            for f_val in (s_f, f_lib_parent):
+                if f_val:
+                    fams_des_sf_cibles.add(f_val)
 
     resultat = []
     for a in articles_complets:
@@ -2884,7 +2890,6 @@ def filtrer_articles_autorises(articles_complets, type_entite, code_entite):
         for s_item in sfs_art:
             if s_item in sf_lib_to_fam_lib and sf_lib_to_fam_lib[s_item]:
                 fams_art.add(sf_lib_to_fam_lib[s_item])
-            # Dans l'Excel d'origine, la sous-famille porte souvent le même libellé que la famille
             fams_art.add(s_item)
 
         # Toutes les classes liées à cet article
@@ -2900,7 +2905,7 @@ def filtrer_articles_autorises(articles_complets, type_entite, code_entite):
             continue
         if familles_ok and not (fams_art & fam_cibles):
             continue
-        if sf_ok and not (sfs_art & sf_cibles):
+        if sf_ok and not ((sfs_art & sf_cibles) or (fams_art & fams_des_sf_cibles)):
             continue
 
         resultat.append(a)

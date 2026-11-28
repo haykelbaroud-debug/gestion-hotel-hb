@@ -1181,7 +1181,7 @@ elif menu == "🧾 Achats & Mouvements":
             else:
                 articles_filtres = db.filtrer_articles_autorises(articles_actifs, "DEPARTEMENT", dept_sel)
 
-                       if not articles_filtres:
+            if not articles_filtres:
                 conn_v = db.get_connection()
                 cur_v = conn_v.cursor()
                 cur_v.execute("SELECT code, designation, classe, sous_famille FROM articles WHERE UPPER(designation) LIKE '%EAU%' OR UPPER(designation) LIKE '%POULET%' LIMIT 3")

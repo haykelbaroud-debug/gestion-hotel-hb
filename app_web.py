@@ -712,13 +712,16 @@ elif menu == "⚙️ Paramétrage de base":
 
         # Indexation des articles selon leur structure réelle :
         # (0:code, 1:designation, 2:sous_famille, 3:sf_lib, 4:famille, 5:classe)
+               sf_vers_fam_map = {s: f for f, sfs in fam_to_sf.items() for s in sfs}
+        fam_vers_cl_map = {f: c for c, fams in cl_to_fam.items() for f in fams}
+
         art_par_cl = {}
         art_par_fam = {}
         art_par_sf = {}
         for a in tous_art_m8:
             sf_u = str(itemgetter(2)(a) or "").strip().upper()
-            fam_u = str(itemgetter(4)(a) or "").strip().upper()
-            cl_u = str(itemgetter(5)(a) or "").strip().upper()
+            fam_u = sf_vers_fam_map.get(sf_u) or str(itemgetter(4)(a) or "").strip().upper()
+            cl_u = fam_vers_cl_map.get(fam_u) or str(itemgetter(5)(a) or "").strip().upper()
             if cl_u:
                 art_par_cl.setdefault(cl_u, []).append(a)
             if fam_u:

@@ -2906,16 +2906,32 @@ def filtrer_articles_autorises(articles_complets, type_entite, code_entite):
         }
         classes_article.discard("")
 
-        # 1. Filtrer par CLASSE (code ou libellé)
+                # 1. Filtrer par CLASSE (code ou libellé)
         if classes_ok and not (classes_article & cl_cibles):
             continue
 
-        # 2. Filtrer par FAMILLE (libellé de famille)
-        if familles_ok and (fam_lib_u not in fam_cibles and fam_raw not in fam_cibles):
+        # 2. Filtrer par FAMILLE (union des libellés et codes de famille de l'article)
+        familles_article = {
+            fam_lib_u,
+            fam_raw,
+            fam_code_to_lib.get(fam_raw, ""),
+            fam_lib_to_code.get(fam_lib_u, ""),
+            sf_to_fam_lib.get(sf_u, ""),
+            sf_to_fam_lib.get(sf_lib_u, ""),
+            sf_to_fam_lib.get(sf_b, ""),
+        }
+        familles_article.discard("")
+        if familles_ok and not (familles_article & fam_cibles):
             continue
 
-        # 3. Filtrer par SOUS-FAMILLE (libellé de sous-famille)
-        if sf_ok and (sf_u not in sf_cibles and sf_lib_u not in sf_cibles and sf_b not in sf_cibles):
+        # 3. Filtrer par SOUS-FAMILLE (union des libellés et codes de sous-famille de l'article)
+        sf_article = {
+            sf_u,
+            sf_lib_u,
+            sf_b,
+        }
+        sf_article.discard("")
+        if sf_ok and not (sf_article & sf_cibles):
             continue
 
         resultat.append(a)

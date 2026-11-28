@@ -2789,12 +2789,11 @@ def enregistrer_config_autorisations_entite(type_entite, code_entite, classes_ok
         conn.close()
 def filtrer_articles_autorises(articles_complets, type_entite, code_entite):
     """
-    Filtre en lecture seule `articles_complets` par cascade stricte (sans aucune équivalence numérique ambiguë) :
-    - Vide = tout autorisé
-    - Classes cochées = uniquement les articles appartenant réellement à ces classes
-    - Familles cochées = uniquement ces familles
-    - Sous-familles cochées = uniquement ces sous-familles
-    - Articles exclus = retirés de la liste finale
+    Filtre en lecture seule `articles_complets` selon la vraie structure de la base :
+    1. Classe : par CODE de classe (01..14) / libellé de classe lié à l'article
+    2. Famille : par LIBELLÉ de famille
+    3. Sous-famille : par LIBELLÉ de sous-famille
+    4. Articles exclus : par CODE article
     """
     if not code_entite:
         return articles_complets
@@ -2811,16 +2810,25 @@ def filtrer_articles_autorises(articles_complets, type_entite, code_entite):
     conn = get_connection()
     try:
         c = conn.cursor()
+        # 1. Classes : code <-> libellé
         c.execute("SELECT UPPER(TRIM(code)), UPPER(TRIM(libelle)) FROM classes")
         rows_cl = c.fetchall()
+
+        # 2. Familles : on indexe par LIBELLÉ (la vraie référence métier)
         c.execute("SELECT UPPER(TRIM(code)), UPPER(TRIM(libelle)), UPPER(TRIM(code_classe)) FROM familles")
         rows_f = c.fetchall()
+
+        # 3. Sous-familles : on indexe par LIBELLÉ et CODE (souvent identiques)
         c.execute("SELECT UPPER(TRIM(code)), UPPER(TRIM(libelle)), UPPER(TRIM(code_famille)) FROM sous_familles")
         rows_sf = c.fetchall()
+
+        # 4. Valeurs brutes directement stockées dans la table articles
+        c.execute("SELECT UPPER(TRIM(code)), UPPER(TRIM(COALESCE(classe, ''))), UPPER(TRIM(COALESCE(sous_famille, ''))) FROM articles")
+        art_brut = {ca: (cl_b, sf_b) for ca, cl_b, sf_b in c.fetchall() if ca}
     finally:
         conn.close()
 
-    # Correspondance stricte code <-> libellé de la même classe
+    # Correspondance code <-> libellé pour les classes choisies
     cl_cibles = set(classes_ok)
     for c_db, l_db in rows_cl:
         if c_db in classes_ok and l_db:
@@ -2828,33 +2836,44 @@ def filtrer_articles_autorises(articles_complets, type_entite, code_entite):
         if l_db in classes_ok and c_db:
             cl_cibles.add(c_db)
 
-    # Familles appartenant strictement à ces classes
-    fam_de_cl = set()
-    fam_to_cl = {}
+    # Associer chaque libellé de famille à sa classe et à son code interne éventuel
+    fam_lib_to_cl = {}
+    fam_code_to_lib = {}
+    fam_lib_to_code = {}
     for f_c, f_l, f_cl in rows_f:
-        if f_c:
-            fam_to_cl[f_c] = f_cl
+        if f_c and f_l:
+            fam_code_to_lib[f_c] = f_l
+            fam_lib_to_code[f_l] = f_c
         if f_l:
-            fam_to_cl[f_l] = f_cl
-        if f_cl in cl_cibles:
-            if f_c:
-                fam_de_cl.add(f_c)
-            if f_l:
-                fam_de_cl.add(f_l)
+            fam_lib_to_cl[f_l] = f_cl
+        if f_c:
+            fam_lib_to_cl[f_c] = f_cl
 
-    # Sous-familles appartenant strictement à ces familles/classes
-    sf_de_cl = set()
-    sf_to_fam = {}
+    # Associer chaque sous-famille (libellé/code) au LIBELLÉ de sa famille et à sa classe
+    sf_to_fam_lib = {}
+    sf_to_cl = {}
     for s_c, s_l, s_f in rows_sf:
-        if s_c:
-            sf_to_fam[s_c] = s_f
-        if s_l:
-            sf_to_fam[s_l] = s_f
-        if s_f in fam_de_cl or fam_to_cl.get(s_f, "") in cl_cibles:
-            if s_c:
-                sf_de_cl.add(s_c)
-            if s_l:
-                sf_de_cl.add(s_l)
+        f_lib = fam_code_to_lib.get(s_f, s_f)
+        cl_p = fam_lib_to_cl.get(f_lib, "") or fam_lib_to_cl.get(s_f, "")
+        for cle_sf in (s_c, s_l):
+            if cle_sf:
+                sf_to_fam_lib[cle_sf] = f_lib
+                sf_to_cl[cle_sf] = cl_p
+
+    # Normaliser les sélections Familles & Sous-Familles en LIBELLÉS + CODES associés
+    fam_cibles = set(familles_ok)
+    for f_sel in list(familles_ok):
+        if f_sel in fam_code_to_lib:
+            fam_cibles.add(fam_code_to_lib[f_sel])
+        if f_sel in fam_lib_to_code:
+            fam_cibles.add(fam_lib_to_code[f_sel])
+
+    sf_cibles = set(sf_ok)
+    for s_c, s_l, _ in rows_sf:
+        if s_c in sf_ok and s_l:
+            sf_cibles.add(s_l)
+        if s_l in sf_ok and s_c:
+            sf_cibles.add(s_c)
 
     resultat = []
     for a in articles_complets:
@@ -2862,23 +2881,39 @@ def filtrer_articles_autorises(articles_complets, type_entite, code_entite):
         if ca_u in articles_exclus:
             continue
 
-        sf_u = str(itemgetter(2)(a) or "").strip().upper()
-        sf_lib_u = str(itemgetter(3)(a) or "").strip().upper()
-        fam_u = str(itemgetter(4)(a) or "").strip().upper() or sf_to_fam.get(sf_u, "")
-        cl_u = str(itemgetter(5)(a) or "").strip().upper() or fam_to_cl.get(fam_u, "")
+        cl_b, sf_b = art_brut.get(ca_u, ("", ""))
 
-        if classes_ok:
-            if not (
-                cl_u in cl_cibles
-                or fam_u in fam_de_cl
-                or sf_u in sf_de_cl
-                or sf_lib_u in sf_de_cl
-            ):
-                continue
+        # Sous-famille réelle (libellé ou code sur l'article)
+        sf_u = str(itemgetter(2)(a) or sf_b or "").strip().upper()
+        sf_lib_u = str(itemgetter(3)(a) or sf_u).strip().upper()
 
-        if familles_ok and fam_u not in familles_ok:
+        # Libellé de famille déduit depuis la sous-famille ou la colonne famille
+        fam_raw = str(itemgetter(4)(a) or "").strip().upper()
+        fam_lib_u = (
+            sf_to_fam_lib.get(sf_u)
+            or sf_to_fam_lib.get(sf_lib_u)
+            or fam_code_to_lib.get(fam_raw, fam_raw)
+        )
+
+        # Code/libellé de classe déduit depuis l'article ou la famille/sous-famille
+        cl_u = (
+            str(itemgetter(5)(a) or "").strip().upper()
+            or cl_b
+            or sf_to_cl.get(sf_u, "")
+            or sf_to_cl.get(sf_lib_u, "")
+            or fam_lib_to_cl.get(fam_lib_u, "")
+        )
+
+        # 1. Filtrer par CLASSE (code ou libellé)
+        if classes_ok and (cl_u not in cl_cibles and cl_b not in cl_cibles):
             continue
-        if sf_ok and (sf_u not in sf_ok and sf_lib_u not in sf_ok):
+
+        # 2. Filtrer par FAMILLE (libellé de famille)
+        if familles_ok and (fam_lib_u not in fam_cibles and fam_raw not in fam_cibles):
+            continue
+
+        # 3. Filtrer par SOUS-FAMILLE (libellé de sous-famille)
+        if sf_ok and (sf_u not in sf_cibles and sf_lib_u not in sf_cibles and sf_b not in sf_cibles):
             continue
 
         resultat.append(a)
